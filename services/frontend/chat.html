@@ -17,13 +17,15 @@
     </div>
     <div class="header-actions">
       <button class="btn btn-primary" onclick="location.href='chat.html'">Chat</button>
+      <button class="btn" onclick="location.href='conversations.html'">Conversations</button>
+      <button class="btn" onclick="location.href='admin.html'">Admin</button>
       <button class="btn" onclick="location.href='settings.html'">Settings</button>
     </div>
   </header>
 
   <main>
     <div class="chat-container" id="chatContainer"></div>
-    <div id="statusText" class="status-text"></div>
+    <div id="statusText" class="status-text status-chat"></div>
 
     <div class="input-area">
       <textarea id="messageInput" rows="3" placeholder="Ask a question about your knowledge base..."></textarea>
@@ -34,6 +36,9 @@
 
   <div class="footer">© 2026 AI RAG Assistant</div>
 
+  <script>
+    window.API_URL = window.API_URL || localStorage.getItem('API_URL');
+  </script>
   <script src="js/config.js"></script>
   <script src="js/chat.js"></script>
 </body>

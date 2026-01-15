@@ -17,15 +17,19 @@
     </div>
     <div class="header-actions">
       <button class="btn" onclick="location.href='chat.html'">Chat</button>
+      <button class="btn" onclick="location.href='admin.html'">Admin</button>
     </div>
   </header>
 
   <main>
-    <div id="conversationList"></div>
+    <div id="conversationList" class="conversation-list"></div>
   </main>
 
   <div class="footer">© 2026 AI RAG Assistant</div>
 
+  <script>
+    window.API_URL = window.API_URL || localStorage.getItem('API_URL');
+  </script>
   <script src="js/config.js"></script>
   <script src="js/conversations.js"></script>
 </body>

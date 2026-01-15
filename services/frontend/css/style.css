@@ -122,6 +122,29 @@ main {
   justify-content: flex-end;
 }
 
+.message.assistant {
+  align-items: flex-start;
+}
+
+.message .avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  background: var(--primary-blue);
+  color: var(--bg-white);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-top: var(--spacing-xs);
+}
+
+.message-content {
+  display: flex;
+  flex-direction: column;
+}
+
 .message-bubble {
   max-width: 70%;
   padding: var(--spacing-md);
@@ -143,7 +166,18 @@ main {
 .status-text {
   font-style: italic;
   color: var(--text-secondary);
+}
+
+.status-chat {
   margin-left: 3rem;
+}
+
+.status-text.success {
+  color: var(--status-success);
+}
+
+.status-text.error {
+  color: var(--status-error);
 }
 
 .input-area {
@@ -198,4 +232,73 @@ main {
   height: 200px;
   overflow-y: auto;
   white-space: pre-wrap;
+}
+
+.conversation-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.conversation-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--spacing-md);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-white);
+}
+
+.conversation-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.conversation-title {
+  font-weight: 600;
+}
+
+.conversation-meta {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.conversation-actions,
+.inline-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.conversation-actions .btn {
+  padding: 0.4rem 0.8rem;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: var(--spacing-md);
+}
+
+.table th,
+.table td {
+  border-bottom: 1px solid var(--border-light);
+  padding: var(--spacing-sm);
+  text-align: left;
+  font-size: 0.875rem;
+}
+
+.table th {
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+}
+
+.table .actions {
+  display: flex;
+  gap: var(--spacing-xs);
 }

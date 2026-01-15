@@ -4,12 +4,15 @@ from typing import Any, AsyncGenerator, Dict, List
 
 import yaml
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from qdrant_client import QdrantClient
+from qdrant_client.http import models as rest
 
 from app.utils.config import refresh_config
 from app.utils.jobs import delete_job, get_job, list_jobs, start_job
+from app.utils.ollama_embed import embed_text
 from app.workers.crawl_worker import run_crawl_job
-from app.workers.ingest_worker import run_ingest_job
+from app.workers.ingest_worker import DB_PATH, run_ingest_job
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -97,7 +100,47 @@ async def stream_log(job_id: str) -> StreamingResponse:
     return StreamingResponse(_tail_log(job_id), media_type="text/event-stream")
 
 
+@router.get("/jobs/{job_id}/log/export")
+async def export_log(job_id: str) -> FileResponse:
+    log_path = Path("/app/data/logs/jobs") / f"{job_id}.log"
+    if not log_path.exists():
+        raise HTTPException(status_code=404, detail="Log not found")
+    return FileResponse(log_path, filename=f"{job_id}.log", media_type="text/plain")
+
+
 @router.delete("/jobs/{job_id}")
 async def remove_job(job_id: str) -> Dict[str, str]:
     delete_job(job_id)
+    return {"status": "ok"}
+
+
+@router.post("/clear_vectors")
+async def clear_vectors() -> Dict[str, str]:
+    system_config = yaml.safe_load((CONFIG_DIR / "system.yml").read_text(encoding="utf-8")) or {}
+    qdrant_config = system_config.get("qdrant", {})
+    ollama_config = system_config.get("ollama", {})
+    collection = qdrant_config.get("collection")
+    qdrant_host = qdrant_config.get("host")
+    embedding_model = ollama_config.get("embedding_model")
+    ollama_host = ollama_config.get("host")
+    if not collection or not qdrant_host:
+        raise HTTPException(status_code=400, detail="Missing qdrant configuration")
+    client = QdrantClient(url=qdrant_host)
+    collections = client.get_collections().collections
+    vector_size = None
+    if any(col.name == collection for col in collections):
+        info = client.get_collection(collection)
+        vector_size = info.config.params.vectors.size
+        client.delete_collection(collection_name=collection)
+    if vector_size is None:
+        if not embedding_model or not ollama_host:
+            raise HTTPException(status_code=400, detail="Missing embedding configuration")
+        vector_size = len(embed_text(ollama_host, embedding_model, "dimension probe"))
+    client.create_collection(
+        collection_name=collection,
+        vectors_config=rest.VectorParams(size=vector_size, distance=rest.Distance.COSINE),
+    )
+    client.create_payload_index(collection_name=collection, field_name="doc_id", field_schema="keyword")
+    if DB_PATH.exists():
+        DB_PATH.unlink()
     return {"status": "ok"}
