@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <div class="logo-circle">AI</div>
+    </div>
+    <div class="header-center">
+      <h1>Admin Console</h1>
+      <p>Manage crawling, ingestion, and agent prompts.</p>
+    </div>
+    <div class="header-actions">
+      <button class="btn" onclick="location.href='chat.html'">Chat</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="unlockSection">
+      <input type="password" id="adminToken" placeholder="ADMIN_TOKEN" />
+      <button class="btn btn-primary" id="unlockButton">Unlock</button>
+      <div id="unlockError" class="status-text"></div>
+    </section>
+
+    <section id="adminSection" style="display:none;">
+      <div class="tabs">
+        <button class="tab-button active" data-tab="crawl">Crawl</button>
+        <button class="tab-button" data-tab="ingest">Ingest</button>
+        <button class="tab-button" data-tab="agents">Agents</button>
+        <button class="tab-button" data-tab="logs">Logs</button>
+      </div>
+
+      <div id="crawl" class="tab-content">
+        <label>Seed URLs (one per line):</label>
+        <textarea id="seedUrls" rows="4"></textarea>
+        <label>Allowed Domains (one per line):</label>
+        <textarea id="allowedDomains" rows="4"></textarea>
+        <label>Blocked Domains (one per line):</label>
+        <textarea id="blockedDomains" rows="4"></textarea>
+        <div>
+          <button class="btn btn-primary" id="saveCrawlConfig">Save Config</button>
+          <button class="btn" id="triggerCrawl">Trigger Crawl</button>
+        </div>
+        <h3>Live Log</h3>
+        <div class="log-area" id="crawlLog"></div>
+        <button class="btn" id="exportCrawlLog">Export Log</button>
+        <button class="btn" id="deleteCrawlLog">Delete Log</button>
+      </div>
+
+      <div id="ingest" class="tab-content" style="display:none;">
+        <p>Artifact Directory: data/artifacts/</p>
+        <p id="lastIngest">Last Ingest: -</p>
+        <button class="btn btn-primary" id="triggerIngest">Trigger Ingest</button>
+        <button class="btn" id="clearVectors">Clear Vector DB</button>
+        <h3>Live Log</h3>
+        <div class="log-area" id="ingestLog"></div>
+        <button class="btn" id="exportIngestLog">Export Log</button>
+        <button class="btn" id="deleteIngestLog">Delete Log</button>
+      </div>
+
+      <div id="agents" class="tab-content" style="display:none;">
+        <label>Intent Agent System Prompt:</label>
+        <textarea id="intentPrompt" rows="6"></textarea>
+        <label>Research Agent System Prompt:</label>
+        <textarea id="researchPrompt" rows="6"></textarea>
+        <label>Synthesis Agent System Prompt:</label>
+        <textarea id="synthesisPrompt" rows="6"></textarea>
+        <label>Validation Agent System Prompt:</label>
+        <textarea id="validationPrompt" rows="6"></textarea>
+        <button class="btn btn-primary" id="savePrompts">Save Prompts</button>
+      </div>
+
+      <div id="logs" class="tab-content" style="display:none;">
+        <table id="jobTable"></table>
+      </div>
+    </section>
+  </main>
+
+  <div class="footer">© 2026 AI RAG Assistant</div>
+
+  <script src="js/config.js"></script>
+  <script src="js/admin.js"></script>
+</body>
+</html>

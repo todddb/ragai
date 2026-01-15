@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.env
+.env.*
+.DS_Store
+
+/data/
+/secrets/
+/ollama_models/
+/qdrant_storage/
