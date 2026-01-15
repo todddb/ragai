@@ -5,10 +5,11 @@ command=${1:-}
 shift || true
 
 case "$command" in
-  up)
-    docker compose up -d
+  start)
+    docker compose up -d ollama qdrant api frontend
+    docker compose ps
     ;;
-  down)
+  stop)
     docker compose down
     ;;
   status)
@@ -17,12 +18,8 @@ case "$command" in
   logs)
     docker compose logs -f "$@"
     ;;
-  rebuild)
-    if [[ "${1:-}" == "--no-cache" ]]; then
-      docker compose build --no-cache
-    else
-      docker compose build
-    fi
+  build)
+    docker compose build
     ;;
   restart)
     docker compose restart "$@"
@@ -31,7 +28,7 @@ case "$command" in
     ./tools/dump_project.sh "$@"
     ;;
   *)
-    echo "Usage: ragaictl {up|down|status|logs|rebuild|restart|dump_project}"
+    echo "Usage: ragaictl {start|stop|status|logs|build|restart|dump_project}"
     exit 1
     ;;
 esac

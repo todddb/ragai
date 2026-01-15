@@ -8,6 +8,8 @@ from fastapi.responses import StreamingResponse
 
 from app.utils.config import refresh_config
 from app.utils.jobs import delete_job, get_job, list_jobs, start_job
+from app.workers.crawl_worker import run_crawl_job
+from app.workers.ingest_worker import run_ingest_job
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -51,24 +53,15 @@ async def update_config(name: str, payload: Dict[str, Any]) -> Dict[str, str]:
     return {"status": "ok"}
 
 
-def _job_worker(job_type: str):
-    def run(log):
-        log(f"Starting {job_type} job")
-        log("Job running...")
-        log(f"{job_type} job complete")
-
-    return run
-
-
 @router.post("/crawl")
 async def trigger_crawl() -> Dict[str, str]:
-    job = start_job("crawl", _job_worker("crawl"))
+    job = start_job("crawl", run_crawl_job)
     return {"job_id": job.job_id}
 
 
 @router.post("/ingest")
 async def trigger_ingest() -> Dict[str, str]:
-    job = start_job("ingest", _job_worker("ingest"))
+    job = start_job("ingest", run_ingest_job)
     return {"job_id": job.job_id}
 
 
