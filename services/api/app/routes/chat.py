@@ -77,6 +77,22 @@ def _format_sse(data: Dict[str, Any]) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
 
+def _dedupe_hits(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    deduped: Dict[str, Dict[str, Any]] = {}
+    for hit in hits:
+        doc_id = hit.get("doc_id", "")
+        chunk_id = hit.get("chunk_id", "")
+        key = f"{doc_id}::{chunk_id}" if doc_id or chunk_id else f"{hit.get('url', '')}::{hit.get('title', '')}"
+        existing = deduped.get(key)
+        if not existing or hit.get("score", 0) > existing.get("score", 0):
+            deduped[key] = hit
+    return sorted(deduped.values(), key=lambda item: item.get("score", 0), reverse=True)
+
+
+def _chunk_text(text: str, chunk_size: int = 20) -> List[str]:
+    return [text[index : index + chunk_size] for index in range(0, len(text), chunk_size)]
+
+
 async def _stream_chat(conversation_id: str, user_text: str) -> AsyncGenerator[str, None]:
     history = list_messages(conversation_id)
     add_message(conversation_id, "user", {"text": user_text})
@@ -105,6 +121,7 @@ async def _stream_chat(conversation_id: str, user_text: str) -> AsyncGenerator[s
                 }
             )
     research_output = await summarize_research({"hits": hits, "total_results": len(hits)})
+    citations = _dedupe_hits(hits)
 
     yield _format_sse({"type": "status", "stage": "synthesis", "message": "Drafting answer"})
     synthesis = await synthesize_answer(intent.model_dump(), research_output.model_dump())
@@ -117,6 +134,7 @@ async def _stream_chat(conversation_id: str, user_text: str) -> AsyncGenerator[s
         yield _format_sse({"type": "done"})
         assistant_content = {
             "text": validation.clarifying_question,
+            "citations": citations,
             "pipeline": {
                 "intent": intent.model_dump(),
                 "research": research_output.model_dump(),
@@ -129,13 +147,14 @@ async def _stream_chat(conversation_id: str, user_text: str) -> AsyncGenerator[s
         return
 
     final_answer = validation.final_answer or synthesis.draft_answer
-    for token in final_answer.split(" "):
-        yield _format_sse({"type": "token", "text": token + " "})
+    for token in _chunk_text(final_answer):
+        yield _format_sse({"type": "token", "text": token})
         await asyncio.sleep(0)
     yield _format_sse({"type": "done"})
 
     assistant_content = {
         "text": final_answer,
+        "citations": citations,
         "pipeline": {
             "intent": intent.model_dump(),
             "research": research_output.model_dump(),
