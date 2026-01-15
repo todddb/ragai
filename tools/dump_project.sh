@@ -1,16 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-scope="${1:-all}"
-max_lines="${2:-2000}"
+scope="all-code"
+scope_set="false"
+max_lines="2000"
 
-if [[ "$scope" == "--scope" ]]; then
-  scope="$2"
-  shift 2
-fi
-if [[ "${1:-}" == "--max-lines" ]]; then
-  max_lines="$2"
-fi
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --scope)
+      scope="${2:-}"
+      scope_set="true"
+      shift 2
+      ;;
+    --max-lines)
+      max_lines="${2:-}"
+      shift 2
+      ;;
+    *)
+      if [[ "$scope_set" == "false" ]]; then
+        scope="$1"
+        scope_set="true"
+      else
+        echo "Unknown argument: $1"
+        exit 1
+      fi
+      shift
+      ;;
+  esac
+done
 
 case "$scope" in
   all)
@@ -38,10 +55,18 @@ case "$scope" in
 esac
 
 timestamp=$(date +"%Y%m%d_%H%M%S")
-output="project_dump_${scope}_${timestamp}.txt"
+output_dir="dumps"
+mkdir -p "$output_dir"
+output="${output_dir}/project_dump_${scope}_${timestamp}.txt"
 
-exclude_paths=(.git __pycache__ data secrets node_modules venv)
+exclude_paths=(.git __pycache__ secrets node_modules venv)
 include_patterns=("*.py" "*.yml" "*.yaml" "*.md" "Dockerfile" "*.txt" "*.json" "*.html" "*.css" "*.js")
+exclude_data=true
+if [[ "$scope" == "all" ]]; then
+  exclude_data=false
+else
+  exclude_paths+=(data)
+fi
 
 {
   echo "Scope: $scope"
@@ -53,6 +78,17 @@ include_patterns=("*.py" "*.yml" "*.yaml" "*.md" "Dockerfile" "*.txt" "*.json" "
     if [[ ! -e "$root" ]]; then
       continue
     fi
+    find_excludes=(
+      ! -path "*/.git/*"
+      ! -path "*/__pycache__/*"
+      ! -path "*/secrets/*"
+      ! -path "*/node_modules/*"
+      ! -path "*/venv/*"
+    )
+    if [[ "$exclude_data" == "true" ]]; then
+      find_excludes+=( ! -path "*/data/*" )
+    fi
+
     while IFS= read -r -d '' file; do
       echo "===== $file ====="
       head -n "$max_lines" "$file"
@@ -62,8 +98,7 @@ include_patterns=("*.py" "*.yml" "*.yaml" "*.md" "Dockerfile" "*.txt" "*.json" "
       -o -name "${include_patterns[3]}" -o -name "${include_patterns[4]}" -o -name "${include_patterns[5]}" \
       -o -name "${include_patterns[6]}" -o -name "${include_patterns[7]}" -o -name "${include_patterns[8]}" \
       -o -name "${include_patterns[9]}" \) \
-      ! -path "*/.git/*" ! -path "*/__pycache__/*" ! -path "*/data/*" ! -path "*/secrets/*" \
-      ! -path "*/node_modules/*" ! -path "*/venv/*" -print0)
+      "${find_excludes[@]}" -print0)
   done
 } > "$output"
 

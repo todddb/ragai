@@ -12,3 +12,4 @@ venv/
 /secrets/
 /ollama_models/
 /qdrant_storage/
+/dumps/

@@ -4,6 +4,35 @@ set -euo pipefail
 command=${1:-}
 shift || true
 
+usage() {
+  cat <<'EOF'
+Usage: ragaictl <command> [options]
+
+Commands:
+  start                                 Start ollama/qdrant/api/frontend and show status
+  stop                                  Stop all services (docker compose down)
+  status                                Show service status
+  logs [service]                        Follow logs (optionally scoped to a service)
+  build                                 Build images (docker compose build)
+  rebuild [--no-cache]                  Clean rebuild images (optional no-cache)
+  restart [service]                     Restart services
+  dump_project [--scope <scope>] [--max-lines <n>]
+                                        Dump project code/data snapshot
+
+Dump scopes:
+  all-code   (default, no data, no secrets)
+  all        (includes data, excludes secrets)
+  api
+  crawler
+  ingestor
+  frontend
+
+Notes:
+  - Data is only included when an explicit scope requests it (e.g., all).
+  - Secrets are always excluded.
+EOF
+}
+
 case "$command" in
   start)
     docker compose up -d ollama qdrant api frontend
@@ -21,14 +50,26 @@ case "$command" in
   build)
     docker compose build
     ;;
+  rebuild)
+    if [[ "${1:-}" == "--no-cache" ]]; then
+      docker compose down --remove-orphans
+      docker compose build --no-cache
+      docker image prune -f
+    else
+      docker compose build
+    fi
+    ;;
   restart)
     docker compose restart "$@"
     ;;
   dump_project)
     ./tools/dump_project.sh "$@"
     ;;
+  -h|--help|"")
+    usage
+    ;;
   *)
-    echo "Usage: ragaictl {start|stop|status|logs|build|restart|dump_project}"
+    usage
     exit 1
     ;;
 esac
