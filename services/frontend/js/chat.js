@@ -44,22 +44,40 @@ function addMessage(role, text, timestamp) {
   return bubble;
 }
 
+function setConversationIdInUrl(value) {
+  const url = new URL(window.location.href);
+  if (value) {
+    url.searchParams.set('conversation_id', value);
+  } else {
+    url.searchParams.delete('conversation_id');
+  }
+  window.history.replaceState({}, '', url);
+}
+
 async function startConversation() {
   const response = await fetch(`${API_BASE}/api/chat/start`, { method: 'POST' });
   const data = await response.json();
   conversationId = data.conversation_id;
 }
 
-async function loadConversation(conversationIdToLoad) {
+function clearConversationUI() {
+  document.getElementById('chatContainer').innerHTML = '';
+  const statusText = document.getElementById('statusText');
+  statusText.textContent = '';
+  lastStatus = '';
+}
+
+async function loadConversation(conversationIdToLoad, options = {}) {
+  const { updateUrl = true } = options;
   const response = await fetch(`${API_BASE}/api/chat/${conversationIdToLoad}`);
   if (!response.ok) {
     await startConversation();
+    clearConversationUI();
     return;
   }
   const data = await response.json();
   conversationId = data.conversation.id;
-  const container = document.getElementById('chatContainer');
-  container.innerHTML = '';
+  clearConversationUI();
   data.messages.forEach((message) => {
     let content = {};
     try {
@@ -69,6 +87,10 @@ async function loadConversation(conversationIdToLoad) {
     }
     addMessage(message.role, content.text || '', message.timestamp);
   });
+  if (updateUrl) {
+    setConversationIdInUrl(conversationIdToLoad);
+  }
+  document.dispatchEvent(new CustomEvent('conversation:changed', { detail: { id: conversationId } }));
 }
 
 function updateStatus(payload) {
@@ -139,22 +161,29 @@ async function sendMessage() {
   }
 }
 
+async function startNewConversation() {
+  await startConversation();
+  clearConversationUI();
+  setConversationIdInUrl(null);
+  document.dispatchEvent(new CustomEvent('conversation:changed', { detail: { id: conversationId } }));
+}
+
+function getCurrentConversationId() {
+  return conversationId;
+}
+
 const sendButton = document.getElementById('sendButton');
-const newConversation = document.getElementById('newConversation');
 
 sendButton.addEventListener('click', sendMessage);
-newConversation.addEventListener('click', async () => {
-  await startConversation();
-  const url = new URL(window.location.href);
-  url.searchParams.delete('conversation_id');
-  window.history.replaceState({}, '', url);
-  document.getElementById('chatContainer').innerHTML = '';
-});
 
 const params = new URLSearchParams(window.location.search);
 const requestedConversation = params.get('conversation_id');
 if (requestedConversation) {
-  loadConversation(requestedConversation);
+  loadConversation(requestedConversation, { updateUrl: false });
 } else {
-  startConversation();
+  startNewConversation();
 }
+
+window.loadConversation = loadConversation;
+window.startNewConversation = startNewConversation;
+window.getCurrentConversationId = getCurrentConversationId;

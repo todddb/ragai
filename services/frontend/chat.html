@@ -17,21 +17,35 @@
     </div>
     <div class="header-actions">
       <button class="btn btn-primary" onclick="location.href='chat.html'">Chat</button>
-      <button class="btn" onclick="location.href='conversations.html'">Conversations</button>
       <button class="btn" onclick="location.href='admin.html'">Admin</button>
       <button class="btn" onclick="location.href='settings.html'">Settings</button>
     </div>
   </header>
 
-  <main>
-    <div class="chat-container" id="chatContainer"></div>
-    <div id="statusText" class="status-text status-chat"></div>
+  <main class="chat-layout">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-title">
+          <span class="sidebar-title-text">Conversations</span>
+        </div>
+        <div class="sidebar-controls">
+          <button class="icon-btn" id="sidebarToggle" aria-label="Collapse conversations sidebar">❮</button>
+          <button class="btn btn-primary btn-small" id="sidebarNew">+ New</button>
+        </div>
+      </div>
+      <div class="conversation-list sidebar-list" id="conversationList"></div>
+      <div class="sidebar-resize-handle" id="sidebarResizeHandle" aria-hidden="true"></div>
+    </aside>
 
-    <div class="input-area">
-      <textarea id="messageInput" rows="3" placeholder="Ask a question about your knowledge base..."></textarea>
-      <button class="btn btn-primary" id="sendButton">Send</button>
-    </div>
-    <div class="link" id="newConversation">Start a new conversation</div>
+    <section class="chat-main">
+      <div class="chat-container" id="chatContainer"></div>
+      <div id="statusText" class="status-text status-chat"></div>
+
+      <div class="input-area">
+        <textarea id="messageInput" rows="3" placeholder="Ask a question about your knowledge base..."></textarea>
+        <button class="btn btn-primary" id="sendButton">Send</button>
+      </div>
+    </section>
   </main>
 
   <div class="footer">© 2026 AI RAG Assistant</div>
@@ -41,5 +55,6 @@
   </script>
   <script src="js/config.js"></script>
   <script src="js/chat.js"></script>
+  <script src="js/sidebar.js"></script>
 </body>
 </html>
