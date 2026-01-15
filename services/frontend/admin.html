@@ -13,99 +13,23 @@
     </div>
     <div class="header-center">
       <h1>Admin Console</h1>
-      <p>Manage crawling, ingestion, and agent prompts.</p>
+      <p>Admin tools are now accessed from Settings.</p>
     </div>
     <div class="header-actions">
-      <button class="btn" onclick="location.href='chat.html'">Chat</button>
-      <button class="btn" onclick="location.href='conversations.html'">Conversations</button>
+      <button class="btn nav-button" onclick="location.href='chat.html'">Chat</button>
+      <button class="btn nav-button active" onclick="location.href='settings.html'">Settings</button>
     </div>
   </header>
 
   <main>
-    <section id="unlockSection">
-      <input type="password" id="adminToken" placeholder="ADMIN_TOKEN" />
-      <button class="btn btn-primary" id="unlockButton">Unlock</button>
-      <div id="unlockError" class="status-text"></div>
-    </section>
-
-    <section id="adminSection" style="display:none;">
-      <div class="tabs">
-        <button class="tab-button active" data-tab="crawl">Crawl</button>
-        <button class="tab-button" data-tab="ingest">Ingest</button>
-        <button class="tab-button" data-tab="agents">Agents</button>
-        <button class="tab-button" data-tab="logs">Logs</button>
-      </div>
-
-      <div id="crawl" class="tab-content">
-        <label>Seed URLs (one per line):</label>
-        <textarea id="seedUrls" rows="4"></textarea>
-        <label>Allowed Domains (one per line):</label>
-        <textarea id="allowedDomains" rows="4"></textarea>
-        <label>Blocked Domains (one per line):</label>
-        <textarea id="blockedDomains" rows="4"></textarea>
-        <div>
-          <button class="btn btn-primary" id="saveCrawlConfig">Save Config</button>
-          <button class="btn" id="triggerCrawl">Trigger Crawl</button>
-          <span id="saveCrawlStatus" class="status-text"></span>
-        </div>
-        <h3>Live Log</h3>
-        <div class="log-area" id="crawlLog"></div>
-        <div class="inline-actions">
-          <button class="btn" id="exportCrawlLog">Export Log</button>
-          <button class="btn" id="deleteCrawlLog">Delete Log</button>
-          <span id="crawlLogStatus" class="status-text"></span>
-        </div>
-      </div>
-
-      <div id="ingest" class="tab-content" style="display:none;">
-        <p>Artifact Directory: data/artifacts/</p>
-        <p id="lastIngest">Last Ingest: -</p>
-        <button class="btn btn-primary" id="triggerIngest">Trigger Ingest</button>
-        <button class="btn" id="clearVectors">Clear Vector DB</button>
-        <span id="clearVectorsStatus" class="status-text"></span>
-        <h3>Live Log</h3>
-        <div class="log-area" id="ingestLog"></div>
-        <div class="inline-actions">
-          <button class="btn" id="exportIngestLog">Export Log</button>
-          <button class="btn" id="deleteIngestLog">Delete Log</button>
-          <span id="ingestLogStatus" class="status-text"></span>
-        </div>
-      </div>
-
-      <div id="agents" class="tab-content" style="display:none;">
-        <label>Intent Agent System Prompt:</label>
-        <textarea id="intentPrompt" rows="6"></textarea>
-        <label>Research Agent System Prompt:</label>
-        <textarea id="researchPrompt" rows="6"></textarea>
-        <label>Synthesis Agent System Prompt:</label>
-        <textarea id="synthesisPrompt" rows="6"></textarea>
-        <label>Validation Agent System Prompt:</label>
-        <textarea id="validationPrompt" rows="6"></textarea>
-        <div>
-          <button class="btn btn-primary" id="savePrompts">Save Prompts</button>
-          <span id="savePromptsStatus" class="status-text"></span>
-        </div>
-      </div>
-
-      <div id="logs" class="tab-content" style="display:none;">
-        <table id="jobTable" class="table"></table>
-        <h3>Job Log</h3>
-        <div class="log-area" id="jobLog"></div>
-        <div class="inline-actions">
-          <button class="btn" id="exportJobLog">Export Log</button>
-          <button class="btn" id="deleteJobLog">Delete Log</button>
-          <span id="jobLogStatus" class="status-text"></span>
-        </div>
-      </div>
-    </section>
+    <p class="settings-help">
+      The admin console now lives inside <strong>Settings → Admin</strong>.
+      Please use that view to unlock and manage crawl, ingest, and agent tools.
+    </p>
+    <button class="btn btn-primary" onclick="location.href='settings.html'">Go to Settings</button>
   </main>
 
   <div class="footer">© 2026 AI RAG Assistant</div>
 
-  <script>
-    window.API_URL = window.API_URL || localStorage.getItem('API_URL');
-  </script>
-  <script src="js/config.js"></script>
-  <script src="js/admin.js"></script>
 </body>
 </html>

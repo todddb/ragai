@@ -1,5 +1,6 @@
 let conversationId = null;
 let lastStatus = '';
+let statusTimeout = null;
 
 const STATUS_LABELS = {
   intent: 'Intent',
@@ -284,24 +285,40 @@ function setConversationIdInUrl(value) {
 }
 
 async function startConversation() {
-  const response = await fetch(`${API_BASE}/api/chat/start`, { method: 'POST' });
-  const data = await response.json();
-  conversationId = data.conversation_id;
+  try {
+    const response = await fetch(`${API_BASE}/api/chat/start`, { method: 'POST' });
+    if (!response.ok) {
+      setStatusMessage(`❌ API error ${response.status}: Unable to start conversation.`, 'error');
+      return false;
+    }
+    const data = await response.json();
+    conversationId = data.conversation_id;
+    return true;
+  } catch (error) {
+    setStatusMessage(`❌ Cannot reach API at ${API_BASE}`, 'error');
+    return false;
+  }
 }
 
 function clearConversationUI() {
   document.getElementById('chatContainer').innerHTML = '';
-  const statusText = document.getElementById('statusText');
-  statusText.textContent = '';
+  setStatusMessage('');
   lastStatus = '';
 }
 
 async function loadConversation(conversationIdToLoad, options = {}) {
   const { updateUrl = true } = options;
-  const response = await fetch(`${API_BASE}/api/chat/${conversationIdToLoad}`);
+  let response;
+  try {
+    response = await fetch(`${API_BASE}/api/chat/${conversationIdToLoad}`);
+  } catch (error) {
+    setStatusMessage(`❌ Cannot reach API at ${API_BASE}`, 'error');
+    return;
+  }
   if (!response.ok) {
     await startConversation();
     clearConversationUI();
+    setStatusMessage('❌ Conversation not found. Started a new one.', 'error', { temporary: true });
     return;
   }
   const data = await response.json();
@@ -318,81 +335,132 @@ async function loadConversation(conversationIdToLoad, options = {}) {
 }
 
 function updateStatus(payload) {
-  const statusText = document.getElementById('statusText');
   const label = STATUS_LABELS[payload.stage] || 'Status';
   lastStatus = `${label}: ${payload.message}`;
-  statusText.textContent = lastStatus;
+  setStatusMessage(lastStatus);
+}
+
+function setStatusMessage(message, type = '', options = {}) {
+  const statusText = document.getElementById('statusText');
+  const { temporary = false } = options;
+  statusText.textContent = message;
+  statusText.classList.remove('success', 'error');
+  if (type) {
+    statusText.classList.add(type);
+  }
+  if (statusTimeout) {
+    clearTimeout(statusTimeout);
+    statusTimeout = null;
+  }
+  if (temporary && message) {
+    statusTimeout = window.setTimeout(() => {
+      statusText.textContent = '';
+      statusText.classList.remove('success', 'error');
+    }, 3000);
+  }
 }
 
 async function sendMessage() {
   const input = document.getElementById('messageInput');
   const text = input.value.trim();
   if (!text) return;
+  if (!conversationId) {
+    const started = await startConversation();
+    if (!started) {
+      return;
+    }
+  }
   input.value = '';
+  input.focus();
   addMessage('user', text);
 
-  const statusText = document.getElementById('statusText');
-  statusText.textContent = lastStatus;
+  setStatusMessage(lastStatus);
 
-  const response = await fetch(`${API_BASE}/api/chat/${conversationId}/message`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text })
-  });
+  try {
+    const response = await fetch(`${API_BASE}/api/chat/${conversationId}/message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    });
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  const assistantBubble = addMessage('assistant', '');
-  const renderer = createStreamRenderer(assistantBubble);
-  let buffer = '';
+    if (!response.ok) {
+      const detail = await response.text();
+      setStatusMessage(`❌ API error ${response.status}: ${detail}`, 'error');
+      return;
+    }
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    while (buffer.includes('\n\n')) {
-      const boundaryIndex = buffer.indexOf('\n\n');
-      const rawEvent = buffer.slice(0, boundaryIndex);
-      buffer = buffer.slice(boundaryIndex + 2);
+    if (!response.body) {
+      setStatusMessage('❌ Response stream unavailable from API.', 'error');
+      return;
+    }
 
-      const dataLines = rawEvent
-        .split('\n')
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.replace(/^data:\s?/, ''));
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const assistantBubble = addMessage('assistant', '');
+    const renderer = createStreamRenderer(assistantBubble);
+    let buffer = '';
+    let doneReceived = false;
 
-      if (!dataLines.length) {
-        continue;
-      }
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      while (buffer.includes('\n\n')) {
+        const boundaryIndex = buffer.indexOf('\n\n');
+        const rawEvent = buffer.slice(0, boundaryIndex);
+        buffer = buffer.slice(boundaryIndex + 2);
 
-      const payloadString = dataLines.join('\n');
-      let payload = null;
-      try {
-        payload = JSON.parse(payloadString);
-      } catch (error) {
-        continue;
-      }
+        const dataLines = rawEvent
+          .split('\n')
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.replace(/^data:\s?/, ''));
 
-      if (payload.type === 'status') {
-        updateStatus(payload);
-      }
-      if (payload.type === 'token') {
-        renderer.append(payload.text);
-      }
-      if (payload.type === 'done') {
-        statusText.textContent = '';
-        lastStatus = '';
-        renderer.finish();
-        await loadConversation(conversationId, { updateUrl: false });
+        if (!dataLines.length) {
+          continue;
+        }
+
+        const payloadString = dataLines.join('\n');
+        let payload = null;
+        try {
+          payload = JSON.parse(payloadString);
+        } catch (error) {
+          continue;
+        }
+
+        if (payload.type === 'status') {
+          updateStatus(payload);
+        }
+        if (payload.type === 'token') {
+          renderer.append(payload.text);
+        }
+        if (payload.type === 'done') {
+          doneReceived = true;
+          setStatusMessage('');
+          lastStatus = '';
+          renderer.finish();
+          await loadConversation(conversationId, { updateUrl: false });
+        }
       }
     }
+
+    if (!doneReceived) {
+      setStatusMessage('❌ Response stream interrupted before completion.', 'error');
+    }
+  } catch (error) {
+    setStatusMessage(`❌ Cannot reach API at ${API_BASE}`, 'error');
   }
 }
 
 async function startNewConversation() {
-  await startConversation();
+  const started = await startConversation();
+  if (!started) {
+    return false;
+  }
   clearConversationUI();
   setConversationIdInUrl(null);
+  setStatusMessage('New conversation started.', 'success', { temporary: true });
   document.dispatchEvent(new CustomEvent('conversation:changed', { detail: { id: conversationId } }));
+  return true;
 }
 
 function getCurrentConversationId() {
@@ -400,8 +468,21 @@ function getCurrentConversationId() {
 }
 
 const sendButton = document.getElementById('sendButton');
+const messageInput = document.getElementById('messageInput');
 
 sendButton.addEventListener('click', sendMessage);
+messageInput.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' || event.shiftKey) {
+    return;
+  }
+  const value = messageInput.value;
+  const cursorAtEnd =
+    messageInput.selectionStart === value.length && messageInput.selectionEnd === value.length;
+  if (cursorAtEnd && value.endsWith('\n')) {
+    event.preventDefault();
+    sendMessage();
+  }
+});
 
 const params = new URLSearchParams(window.location.search);
 const requestedConversation = params.get('conversation_id');
@@ -414,3 +495,4 @@ if (requestedConversation) {
 window.loadConversation = loadConversation;
 window.startNewConversation = startNewConversation;
 window.getCurrentConversationId = getCurrentConversationId;
+window.setStatusMessage = setStatusMessage;

@@ -65,11 +65,22 @@ Use the Conversations page to manage saved threads:
 
 ### Admin Workflow
 
-1. **Unlock** the admin console with a token from `secrets/admin_tokens`.
+1. **Open Settings → Admin** and unlock the admin console with a token from `secrets/admin_tokens`.
 2. Update `allow_block` configuration and click **Save Config**.
 3. Trigger a crawl, monitor logs, and export/delete logs as needed.
 4. Trigger ingest to push artifacts into Qdrant.
 5. Chat in the Chat UI once ingest completes.
+
+### Connection Awareness
+
+Use **Settings → Connection** to verify API and Ollama connectivity. The UI can also override
+the API base URL via localStorage for pointing at a remote API.
+
+Health endpoint:
+
+```
+GET /api/health
+```
 
 ### API URL Overrides
 

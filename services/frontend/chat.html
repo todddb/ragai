@@ -6,7 +6,7 @@
   <title>AI RAG Assistant</title>
   <link rel="stylesheet" href="css/style.css" />
 </head>
-<body>
+<body class="page-chat">
   <header>
     <div class="header-left">
       <div class="logo-circle">AI</div>
@@ -16,9 +16,8 @@
       <p>Ask questions about your knowledge base and documents.</p>
     </div>
     <div class="header-actions">
-      <button class="btn btn-primary" onclick="location.href='chat.html'">Chat</button>
-      <button class="btn" onclick="location.href='admin.html'">Admin</button>
-      <button class="btn" onclick="location.href='settings.html'">Settings</button>
+      <button class="btn nav-button active" onclick="location.href='chat.html'">Chat</button>
+      <button class="btn nav-button" onclick="location.href='settings.html'">Settings</button>
     </div>
   </header>
 
@@ -39,11 +38,12 @@
 
     <section class="chat-main">
       <div class="chat-container" id="chatContainer"></div>
-      <div id="statusText" class="status-text status-chat"></div>
-
-      <div class="input-area">
-        <textarea id="messageInput" rows="3" placeholder="Ask a question about your knowledge base..."></textarea>
-        <button class="btn btn-primary" id="sendButton">Send</button>
+      <div class="chat-composer">
+        <div id="statusText" class="status-text status-chat"></div>
+        <div class="input-area">
+          <textarea id="messageInput" rows="3" placeholder="Ask a question about your knowledge base..."></textarea>
+          <button class="btn btn-primary" id="sendButton">Send</button>
+        </div>
       </div>
     </section>
   </main>

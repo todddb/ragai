@@ -195,7 +195,10 @@ if (sidebar && conversationList) {
 
   sidebarNew?.addEventListener('click', async () => {
     if (window.startNewConversation) {
-      await window.startNewConversation();
+      const started = await window.startNewConversation();
+      if (!started) {
+        return;
+      }
       loadConversations();
       updateActiveConversation();
     }

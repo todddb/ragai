@@ -11,6 +11,7 @@ from app.agents.intent import analyze_intent
 from app.agents.research import summarize_research
 from app.agents.synthesis import synthesize_answer
 from app.agents.validation import validate_answer
+from app.models.schemas import ResearchOutput
 from app.utils.config import load_system_config
 from app.utils.db import (
     add_message,
@@ -102,25 +103,34 @@ async def _stream_chat(conversation_id: str, user_text: str) -> AsyncGenerator[s
 
     yield _format_sse({"type": "status", "stage": "research", "message": "Searching knowledge base"})
     config = load_system_config()
-    qdrant = QdrantClient(url=config["qdrant"]["host"])
-    collection = config["qdrant"]["collection"]
     hits = []
-    for query in intent.search_queries:
-        vector = await embed_text(query)
-        search_result = qdrant.search(collection, query_vector=vector, limit=5)
-        for hit in search_result:
-            payload = hit.payload or {}
-            hits.append(
-                {
-                    "doc_id": payload.get("doc_id", ""),
-                    "chunk_id": payload.get("chunk_id", ""),
-                    "url": payload.get("url", ""),
-                    "title": payload.get("title", ""),
-                    "score": hit.score,
-                    "text": payload.get("text", ""),
-                }
-            )
-    research_output = await summarize_research({"hits": hits, "total_results": len(hits)})
+    try:
+        qdrant = QdrantClient(url=config["qdrant"]["host"])
+        collection = config["qdrant"]["collection"]
+        collections = qdrant.get_collections().collections
+        if any(col.name == collection for col in collections):
+            for query in intent.search_queries:
+                vector = await embed_text(query)
+                search_result = qdrant.search(collection, query_vector=vector, limit=5)
+                for hit in search_result:
+                    payload = hit.payload or {}
+                    hits.append(
+                        {
+                            "doc_id": payload.get("doc_id", ""),
+                            "chunk_id": payload.get("chunk_id", ""),
+                            "url": payload.get("url", ""),
+                            "title": payload.get("title", ""),
+                            "score": hit.score,
+                            "text": payload.get("text", ""),
+                        }
+                    )
+    except Exception:
+        hits = []
+
+    try:
+        research_output = await summarize_research({"hits": hits, "total_results": len(hits)})
+    except Exception:
+        research_output = ResearchOutput(hits=[], total_results=0)
     citations = _dedupe_hits(hits)
 
     yield _format_sse({"type": "status", "stage": "synthesis", "message": "Drafting answer"})

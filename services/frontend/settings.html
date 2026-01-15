@@ -6,22 +6,162 @@
   <title>Settings</title>
   <link rel="stylesheet" href="css/style.css" />
 </head>
-<body>
+<body class="page-settings">
   <header>
     <div class="header-left">
       <div class="logo-circle">AI</div>
     </div>
     <div class="header-center">
       <h1>Settings</h1>
-      <p>Settings will be available in v0.2.</p>
+      <p>Connectivity, access, and environment controls.</p>
     </div>
     <div class="header-actions">
-      <button class="btn" onclick="location.href='chat.html'">Chat</button>
+      <button class="btn nav-button" onclick="location.href='chat.html'">Chat</button>
+      <button class="btn nav-button active" onclick="location.href='settings.html'">Settings</button>
     </div>
   </header>
-  <main>
-    <p>Placeholder for user settings.</p>
+
+  <main class="settings-layout">
+    <section class="settings-section">
+      <div class="section-header">
+        <h2>Connection</h2>
+        <button class="btn btn-primary" id="testConnection">Test Connection</button>
+      </div>
+      <div class="settings-grid">
+        <div class="settings-card">
+          <div class="settings-label">API Base URL</div>
+          <div class="settings-value" id="apiBaseDisplay">-</div>
+        </div>
+        <div class="settings-card">
+          <div class="settings-label">API Status</div>
+          <div class="settings-value">
+            <span id="apiStatus" class="status-pill">Unknown</span>
+          </div>
+        </div>
+        <div class="settings-card">
+          <div class="settings-label">Ollama Status</div>
+          <div class="settings-value">
+            <span id="ollamaStatus" class="status-pill">Unknown</span>
+          </div>
+        </div>
+        <div class="settings-card">
+          <div class="settings-label">Ollama Model</div>
+          <div class="settings-value" id="ollamaModel">-</div>
+        </div>
+      </div>
+      <div id="connectionMessage" class="status-text"></div>
+    </section>
+
+    <section class="settings-section">
+      <h2>API URL Override</h2>
+      <p class="settings-help">
+        Override the API base URL used by the UI. This updates <code>localStorage.API_URL</code> and reloads.
+      </p>
+      <div class="settings-row">
+        <input type="url" id="apiUrlInput" placeholder="http://localhost:8000" />
+        <button class="btn btn-primary" id="saveApiUrl">Save & Reload</button>
+      </div>
+    </section>
+
+    <section class="settings-section">
+      <h2>Access</h2>
+      <div class="segmented-control" role="tablist" aria-label="Settings mode">
+        <button class="segmented-button active" id="toggleUser" type="button" role="tab" aria-selected="true">
+          User
+        </button>
+        <button class="segmented-button" id="toggleAdmin" type="button" role="tab" aria-selected="false">
+          Admin
+        </button>
+      </div>
+
+      <div id="adminPanel" class="admin-panel" style="display: none;">
+        <section id="unlockSection">
+          <input type="password" id="adminToken" placeholder="ADMIN_TOKEN" />
+          <button class="btn btn-primary" id="unlockButton">Unlock</button>
+          <div id="unlockError" class="status-text"></div>
+        </section>
+
+        <section id="adminSection" style="display:none;">
+          <div class="tabs">
+            <button class="tab-button active" data-tab="crawl">Crawl</button>
+            <button class="tab-button" data-tab="ingest">Ingest</button>
+            <button class="tab-button" data-tab="agents">Agents</button>
+            <button class="tab-button" data-tab="logs">Logs</button>
+          </div>
+
+          <div id="crawl" class="tab-content">
+            <label>Seed URLs (one per line):</label>
+            <textarea id="seedUrls" rows="4"></textarea>
+            <label>Allowed Domains (one per line):</label>
+            <textarea id="allowedDomains" rows="4"></textarea>
+            <label>Blocked Domains (one per line):</label>
+            <textarea id="blockedDomains" rows="4"></textarea>
+            <div>
+              <button class="btn btn-primary" id="saveCrawlConfig">Save Config</button>
+              <button class="btn" id="triggerCrawl">Trigger Crawl</button>
+              <span id="saveCrawlStatus" class="status-text"></span>
+            </div>
+            <h3>Live Log</h3>
+            <div class="log-area" id="crawlLog"></div>
+            <div class="inline-actions">
+              <button class="btn" id="exportCrawlLog">Export Log</button>
+              <button class="btn" id="deleteCrawlLog">Delete Log</button>
+              <span id="crawlLogStatus" class="status-text"></span>
+            </div>
+          </div>
+
+          <div id="ingest" class="tab-content" style="display:none;">
+            <p>Artifact Directory: data/artifacts/</p>
+            <p id="lastIngest">Last Ingest: -</p>
+            <button class="btn btn-primary" id="triggerIngest">Trigger Ingest</button>
+            <button class="btn" id="clearVectors">Clear Vector DB</button>
+            <span id="clearVectorsStatus" class="status-text"></span>
+            <h3>Live Log</h3>
+            <div class="log-area" id="ingestLog"></div>
+            <div class="inline-actions">
+              <button class="btn" id="exportIngestLog">Export Log</button>
+              <button class="btn" id="deleteIngestLog">Delete Log</button>
+              <span id="ingestLogStatus" class="status-text"></span>
+            </div>
+          </div>
+
+          <div id="agents" class="tab-content" style="display:none;">
+            <label>Intent Agent System Prompt:</label>
+            <textarea id="intentPrompt" rows="6"></textarea>
+            <label>Research Agent System Prompt:</label>
+            <textarea id="researchPrompt" rows="6"></textarea>
+            <label>Synthesis Agent System Prompt:</label>
+            <textarea id="synthesisPrompt" rows="6"></textarea>
+            <label>Validation Agent System Prompt:</label>
+            <textarea id="validationPrompt" rows="6"></textarea>
+            <div>
+              <button class="btn btn-primary" id="savePrompts">Save Prompts</button>
+              <span id="savePromptsStatus" class="status-text"></span>
+            </div>
+          </div>
+
+          <div id="logs" class="tab-content" style="display:none;">
+            <table id="jobTable" class="table"></table>
+            <h3>Job Log</h3>
+            <div class="log-area" id="jobLog"></div>
+            <div class="inline-actions">
+              <button class="btn" id="exportJobLog">Export Log</button>
+              <button class="btn" id="deleteJobLog">Delete Log</button>
+              <span id="jobLogStatus" class="status-text"></span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
   </main>
+
   <div class="footer">© 2026 AI RAG Assistant</div>
+
+  <script>
+    window.API_URL = window.API_URL || localStorage.getItem('API_URL');
+  </script>
+  <script src="js/config.js"></script>
+  <script src="js/admin.js"></script>
+  <script src="js/settings.js"></script>
 </body>
 </html>
