@@ -1,4 +1,5 @@
 import signal
+import threading
 from pathlib import Path
 from typing import Any, Dict
 
@@ -38,4 +39,10 @@ def reload_all(_: int, __: Any) -> None:
         refresh_config(name)
 
 
-signal.signal(signal.SIGHUP, reload_all)
+# ✅ Only register SIGHUP when we're in the main thread and SIGHUP exists
+try:
+    if threading.current_thread() is threading.main_thread() and hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, reload_all)
+except Exception:
+    # Don't crash the API if signal handlers can't be installed
+    pass

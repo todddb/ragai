@@ -1,0 +1,2696 @@
+Scope: all-code
+Timestamp: 20260115_151333
+Excluded: .git __pycache__ data secrets node_modules venv
+
+===== services/frontend/settings.html =====
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Settings</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <div class="logo-circle">AI</div>
+    </div>
+    <div class="header-center">
+      <h1>Settings</h1>
+      <p>Settings will be available in v0.2.</p>
+    </div>
+    <div class="header-actions">
+      <button class="btn" onclick="location.href='chat.html'">Chat</button>
+    </div>
+  </header>
+  <main>
+    <p>Placeholder for user settings.</p>
+  </main>
+  <div class="footer">© 2026 AI RAG Assistant</div>
+</body>
+</html>
+
+===== services/frontend/admin.html =====
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <div class="logo-circle">AI</div>
+    </div>
+    <div class="header-center">
+      <h1>Admin Console</h1>
+      <p>Manage crawling, ingestion, and agent prompts.</p>
+    </div>
+    <div class="header-actions">
+      <button class="btn" onclick="location.href='chat.html'">Chat</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="unlockSection">
+      <input type="password" id="adminToken" placeholder="ADMIN_TOKEN" />
+      <button class="btn btn-primary" id="unlockButton">Unlock</button>
+      <div id="unlockError" class="status-text"></div>
+    </section>
+
+    <section id="adminSection" style="display:none;">
+      <div class="tabs">
+        <button class="tab-button active" data-tab="crawl">Crawl</button>
+        <button class="tab-button" data-tab="ingest">Ingest</button>
+        <button class="tab-button" data-tab="agents">Agents</button>
+        <button class="tab-button" data-tab="logs">Logs</button>
+      </div>
+
+      <div id="crawl" class="tab-content">
+        <label>Seed URLs (one per line):</label>
+        <textarea id="seedUrls" rows="4"></textarea>
+        <label>Allowed Domains (one per line):</label>
+        <textarea id="allowedDomains" rows="4"></textarea>
+        <label>Blocked Domains (one per line):</label>
+        <textarea id="blockedDomains" rows="4"></textarea>
+        <div>
+          <button class="btn btn-primary" id="saveCrawlConfig">Save Config</button>
+          <button class="btn" id="triggerCrawl">Trigger Crawl</button>
+        </div>
+        <h3>Live Log</h3>
+        <div class="log-area" id="crawlLog"></div>
+        <button class="btn" id="exportCrawlLog">Export Log</button>
+        <button class="btn" id="deleteCrawlLog">Delete Log</button>
+      </div>
+
+      <div id="ingest" class="tab-content" style="display:none;">
+        <p>Artifact Directory: data/artifacts/</p>
+        <p id="lastIngest">Last Ingest: -</p>
+        <button class="btn btn-primary" id="triggerIngest">Trigger Ingest</button>
+        <button class="btn" id="clearVectors">Clear Vector DB</button>
+        <h3>Live Log</h3>
+        <div class="log-area" id="ingestLog"></div>
+        <button class="btn" id="exportIngestLog">Export Log</button>
+        <button class="btn" id="deleteIngestLog">Delete Log</button>
+      </div>
+
+      <div id="agents" class="tab-content" style="display:none;">
+        <label>Intent Agent System Prompt:</label>
+        <textarea id="intentPrompt" rows="6"></textarea>
+        <label>Research Agent System Prompt:</label>
+        <textarea id="researchPrompt" rows="6"></textarea>
+        <label>Synthesis Agent System Prompt:</label>
+        <textarea id="synthesisPrompt" rows="6"></textarea>
+        <label>Validation Agent System Prompt:</label>
+        <textarea id="validationPrompt" rows="6"></textarea>
+        <button class="btn btn-primary" id="savePrompts">Save Prompts</button>
+      </div>
+
+      <div id="logs" class="tab-content" style="display:none;">
+        <table id="jobTable"></table>
+      </div>
+    </section>
+  </main>
+
+  <div class="footer">© 2026 AI RAG Assistant</div>
+
+  <script src="js/config.js"></script>
+  <script src="js/admin.js"></script>
+</body>
+</html>
+
+===== services/frontend/js/chat.js =====
+let conversationId = null;
+
+function addMessage(role, text) {
+  const container = document.getElementById('chatContainer');
+  const message = document.createElement('div');
+  message.className = `message ${role}`;
+  const bubble = document.createElement('div');
+  bubble.className = 'message-bubble';
+  bubble.textContent = text;
+  const meta = document.createElement('div');
+  meta.className = 'message-meta';
+  meta.textContent = new Date().toLocaleString();
+  const wrapper = document.createElement('div');
+  wrapper.appendChild(bubble);
+  wrapper.appendChild(meta);
+  message.appendChild(wrapper);
+  container.appendChild(message);
+  container.scrollTop = container.scrollHeight;
+  return bubble;
+}
+
+async function startConversation() {
+  const response = await fetch(`${API_BASE}/api/chat/start`, { method: 'POST' });
+  const data = await response.json();
+  conversationId = data.conversation_id;
+}
+
+async function sendMessage() {
+  const input = document.getElementById('messageInput');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  addMessage('user', text);
+
+  const statusText = document.getElementById('statusText');
+  statusText.textContent = '';
+
+  const response = await fetch(`${API_BASE}/api/chat/${conversationId}/message`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text })
+  });
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let assistantBubble = addMessage('assistant', '');
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    const chunk = decoder.decode(value, { stream: true });
+    chunk.split('\n\n').forEach((line) => {
+      if (!line.startsWith('data: ')) return;
+      const payload = JSON.parse(line.replace('data: ', ''));
+      if (payload.type === 'status') {
+        statusText.textContent = payload.message;
+      }
+      if (payload.type === 'token') {
+        assistantBubble.textContent += payload.text;
+      }
+      if (payload.type === 'done') {
+        statusText.textContent = '';
+      }
+    });
+  }
+}
+
+const sendButton = document.getElementById('sendButton');
+const newConversation = document.getElementById('newConversation');
+
+sendButton.addEventListener('click', sendMessage);
+newConversation.addEventListener('click', async () => {
+  await startConversation();
+  document.getElementById('chatContainer').innerHTML = '';
+});
+
+startConversation();
+
+===== services/frontend/js/config.js =====
+const API_BASE = window.API_URL || 'http://localhost:8000';
+
+===== services/frontend/js/admin.js =====
+let authToken = null;
+let currentJobId = null;
+
+function showTab(name) {
+  document.querySelectorAll('.tab-content').forEach((el) => {
+    el.style.display = el.id === name ? 'block' : 'none';
+  });
+  document.querySelectorAll('.tab-button').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.tab === name);
+  });
+}
+
+async function unlock() {
+  const token = document.getElementById('adminToken').value.trim();
+  const error = document.getElementById('unlockError');
+  error.textContent = '';
+  const response = await fetch(`${API_BASE}/api/admin/unlock`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token })
+  });
+  if (!response.ok) {
+    error.textContent = 'Invalid token.';
+    return;
+  }
+  authToken = token;
+  document.getElementById('unlockSection').style.display = 'none';
+  document.getElementById('adminSection').style.display = 'block';
+  loadConfigs();
+  loadJobs();
+}
+
+async function loadConfigs() {
+  const allow = await fetch(`${API_BASE}/api/admin/config/allow_block`).then((r) => r.json());
+  document.getElementById('seedUrls').value = (allow.seed_urls || []).join('\n');
+  document.getElementById('allowedDomains').value = (allow.allowed_domains || []).join('\n');
+  document.getElementById('blockedDomains').value = (allow.blocked_domains || []).join('\n');
+
+  const agents = await fetch(`${API_BASE}/api/admin/config/agents`).then((r) => r.json());
+  document.getElementById('intentPrompt').value = agents.agents.intent.system_prompt || '';
+  document.getElementById('researchPrompt').value = agents.agents.research.system_prompt || '';
+  document.getElementById('synthesisPrompt').value = agents.agents.synthesis.system_prompt || '';
+  document.getElementById('validationPrompt').value = agents.agents.validation.system_prompt || '';
+}
+
+async function saveCrawlConfig() {
+  const payload = {
+    seed_urls: document.getElementById('seedUrls').value.split('\n').filter(Boolean),
+    allowed_domains: document.getElementById('allowedDomains').value.split('\n').filter(Boolean),
+    blocked_domains: document.getElementById('blockedDomains').value.split('\n').filter(Boolean)
+  };
+  await fetch(`${API_BASE}/api/admin/config/allow_block`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+}
+
+async function savePrompts() {
+  const payload = {
+    agents: {
+      intent: { system_prompt: document.getElementById('intentPrompt').value },
+      research: { system_prompt: document.getElementById('researchPrompt').value },
+      synthesis: { system_prompt: document.getElementById('synthesisPrompt').value },
+      validation: { system_prompt: document.getElementById('validationPrompt').value }
+    }
+  };
+  await fetch(`${API_BASE}/api/admin/config/agents`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+}
+
+function streamLog(jobId, targetId) {
+  const logArea = document.getElementById(targetId);
+  logArea.textContent = '';
+  const eventSource = new EventSource(`${API_BASE}/api/admin/jobs/${jobId}/log`);
+  eventSource.onmessage = (event) => {
+    logArea.textContent += `${event.data}\n`;
+    logArea.scrollTop = logArea.scrollHeight;
+  };
+  return eventSource;
+}
+
+async function triggerJob(type) {
+  const response = await fetch(`${API_BASE}/api/admin/${type}`, { method: 'POST' });
+  const data = await response.json();
+  currentJobId = data.job_id;
+  if (type === 'crawl') {
+    streamLog(currentJobId, 'crawlLog');
+  } else {
+    streamLog(currentJobId, 'ingestLog');
+  }
+}
+
+async function loadJobs() {
+  const jobs = await fetch(`${API_BASE}/api/admin/jobs`).then((r) => r.json());
+  const table = document.getElementById('jobTable');
+  table.innerHTML = '<tr><th>Job ID</th><th>Type</th><th>Status</th><th>Started</th><th>Ended</th></tr>';
+  jobs.forEach((job) => {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td>${job.job_id}</td>
+      <td>${job.job_type}</td>
+      <td>${job.status}</td>
+      <td>${job.started_at}</td>
+      <td>${job.ended_at || '-'}</td>
+    `;
+    table.appendChild(row);
+  });
+}
+
+document.getElementById('unlockButton').addEventListener('click', unlock);
+
+document.querySelectorAll('.tab-button').forEach((btn) => {
+  btn.addEventListener('click', () => showTab(btn.dataset.tab));
+});
+
+document.getElementById('saveCrawlConfig').addEventListener('click', saveCrawlConfig);
+
+document.getElementById('triggerCrawl').addEventListener('click', () => triggerJob('crawl'));
+
+document.getElementById('triggerIngest').addEventListener('click', () => triggerJob('ingest'));
+
+document.getElementById('savePrompts').addEventListener('click', savePrompts);
+
+===== services/frontend/js/conversations.js =====
+async function loadConversations() {
+  const response = await fetch(`${API_BASE}/api/chat/list`);
+  const data = await response.json();
+  const container = document.getElementById('conversationList');
+  container.innerHTML = '';
+  data.forEach((conv) => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'message-bubble';
+    wrapper.style.marginBottom = '1rem';
+    wrapper.innerHTML = `
+      <strong>${conv.title}</strong><br />
+      <small>${conv.updated_at}</small>
+      <div style="margin-top:0.5rem;">
+        <button class="btn" data-id="${conv.id}" data-action="rename">Rename</button>
+        <button class="btn" data-id="${conv.id}" data-action="delete">Delete</button>
+        <button class="btn" data-id="${conv.id}" data-action="export">Export</button>
+      </div>
+    `;
+    container.appendChild(wrapper);
+  });
+}
+
+document.addEventListener('click', async (event) => {
+  const target = event.target;
+  if (!target.dataset || !target.dataset.action) {
+    return;
+  }
+  const conversationId = target.dataset.id;
+  if (target.dataset.action === 'rename') {
+    const title = prompt('New title');
+    if (!title) return;
+    await fetch(`${API_BASE}/api/chat/${conversationId}`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({title})
+    });
+    loadConversations();
+  }
+  if (target.dataset.action === 'delete') {
+    await fetch(`${API_BASE}/api/chat/${conversationId}`, { method: 'DELETE' });
+    loadConversations();
+  }
+  if (target.dataset.action === 'export') {
+    const response = await fetch(`${API_BASE}/api/chat/${conversationId}/export`);
+    const data = await response.json();
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `conversation_${conversationId}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+});
+
+loadConversations();
+
+===== services/frontend/conversations.html =====
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Conversations</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <div class="logo-circle">AI</div>
+    </div>
+    <div class="header-center">
+      <h1>Conversations</h1>
+      <p>Manage your saved conversations.</p>
+    </div>
+    <div class="header-actions">
+      <button class="btn" onclick="location.href='chat.html'">Chat</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="conversationList"></div>
+  </main>
+
+  <div class="footer">© 2026 AI RAG Assistant</div>
+
+  <script src="js/config.js"></script>
+  <script src="js/conversations.js"></script>
+</body>
+</html>
+
+===== services/frontend/index.html =====
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="refresh" content="0; url=chat.html" />
+  <title>RagAI</title>
+</head>
+<body>
+  Redirecting...
+</body>
+</html>
+
+===== services/frontend/chat.html =====
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI RAG Assistant</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <div class="logo-circle">AI</div>
+    </div>
+    <div class="header-center">
+      <h1>AI RAG Assistant</h1>
+      <p>Ask questions about your knowledge base and documents.</p>
+    </div>
+    <div class="header-actions">
+      <button class="btn btn-primary" onclick="location.href='chat.html'">Chat</button>
+      <button class="btn" onclick="location.href='settings.html'">Settings</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="chat-container" id="chatContainer"></div>
+    <div id="statusText" class="status-text"></div>
+
+    <div class="input-area">
+      <textarea id="messageInput" rows="3" placeholder="Ask a question about your knowledge base..."></textarea>
+      <button class="btn btn-primary" id="sendButton">Send</button>
+    </div>
+    <div class="link" id="newConversation">Start a new conversation</div>
+  </main>
+
+  <div class="footer">© 2026 AI RAG Assistant</div>
+
+  <script src="js/config.js"></script>
+  <script src="js/chat.js"></script>
+</body>
+</html>
+
+===== services/frontend/Dockerfile =====
+FROM nginx:alpine
+
+COPY . /usr/share/nginx/html
+
+===== services/frontend/css/style.css =====
+:root {
+  --primary-blue: #0066CC;
+  --primary-blue-hover: #0052A3;
+  --bg-page: #F5F7FA;
+  --bg-white: #FFFFFF;
+  --bg-user-message: #E8F4FF;
+  --bg-ai-message: #FFFFFF;
+  --text-primary: #1F2937;
+  --text-secondary: #6B7280;
+  --text-tertiary: #9CA3AF;
+  --border-light: #E5E7EB;
+  --border-medium: #D1D5DB;
+  --status-success: #10B981;
+  --status-error: #EF4444;
+  --status-warning: #F59E0B;
+  --spacing-xs: 0.25rem;
+  --spacing-sm: 0.5rem;
+  --spacing-md: 1rem;
+  --spacing-lg: 1.5rem;
+  --spacing-xl: 2rem;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-full: 9999px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Inter", sans-serif;
+  background: var(--bg-page);
+  color: var(--text-primary);
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-lg);
+  background: var(--bg-white);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.logo-circle {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-full);
+  background: var(--primary-blue);
+  color: var(--bg-white);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+}
+
+.header-center {
+  text-align: center;
+}
+
+.header-center h1 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.header-center p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.header-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+}
+
+.btn {
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-light);
+  background: var(--bg-white);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.btn-primary {
+  background: var(--primary-blue);
+  color: var(--bg-white);
+  border-color: var(--primary-blue);
+}
+
+.btn-primary:hover {
+  background: var(--primary-blue-hover);
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--spacing-lg);
+}
+
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.message {
+  display: flex;
+  gap: var(--spacing-sm);
+}
+
+.message.user {
+  justify-content: flex-end;
+}
+
+.message-bubble {
+  max-width: 70%;
+  padding: var(--spacing-md);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-ai-message);
+}
+
+.message.user .message-bubble {
+  background: var(--bg-user-message);
+}
+
+.message-meta {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-top: var(--spacing-xs);
+}
+
+.status-text {
+  font-style: italic;
+  color: var(--text-secondary);
+  margin-left: 3rem;
+}
+
+.input-area {
+  margin-top: var(--spacing-lg);
+  display: flex;
+  gap: var(--spacing-sm);
+}
+
+.input-area textarea {
+  flex: 1;
+  padding: var(--spacing-md);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-light);
+  resize: vertical;
+}
+
+.footer {
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  padding: var(--spacing-lg);
+}
+
+.link {
+  color: var(--primary-blue);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.tabs {
+  display: flex;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+}
+
+.tab-button {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-white);
+}
+
+.tab-button.active {
+  background: var(--primary-blue);
+  color: var(--bg-white);
+}
+
+.log-area {
+  border: 1px solid var(--border-light);
+  background: var(--bg-white);
+  padding: var(--spacing-md);
+  height: 200px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+===== services/ingestor/app/main.py =====
+from app.ingest import ingest
+from app.utils.db import init_db
+
+
+def main() -> None:
+    init_db()
+    ingest()
+
+
+if __name__ == "__main__":
+    main()
+
+===== services/ingestor/app/utils/qdrant.py =====
+from typing import List
+
+from qdrant_client import QdrantClient
+from qdrant_client.http import models as rest
+
+
+def ensure_collection(client: QdrantClient, collection: str, vector_size: int) -> None:
+    collections = client.get_collections().collections
+    if any(col.name == collection for col in collections):
+        info = client.get_collection(collection)
+        existing_size = info.config.params.vectors.size
+        if existing_size != vector_size:
+            raise ValueError(
+                f"Qdrant collection '{collection}' has vector size {existing_size}, "
+                f"expected {vector_size}. Clear vectors or use a matching embedding model."
+            )
+        return
+    client.create_collection(
+        collection_name=collection,
+        vectors_config=rest.VectorParams(size=vector_size, distance=rest.Distance.COSINE),
+    )
+    client.create_payload_index(collection_name=collection, field_name="doc_id", field_schema="keyword")
+
+
+def delete_by_doc_id(client: QdrantClient, collection: str, doc_id: str) -> None:
+    client.delete(
+        collection_name=collection,
+        points_selector=rest.Filter(
+            must=[rest.FieldCondition(key="doc_id", match=rest.MatchValue(value=doc_id))]
+        ),
+    )
+
+
+def upsert_vectors(
+    client: QdrantClient,
+    collection: str,
+    ids: List[str],
+    vectors: List[List[float]],
+    payloads: List[dict],
+) -> None:
+    client.upsert(
+        collection_name=collection,
+        points=rest.Batch(ids=ids, vectors=vectors, payloads=payloads),
+    )
+
+===== services/ingestor/app/utils/db.py =====
+import sqlite3
+from pathlib import Path
+
+DB_PATH = Path("/app/data/ingest/metadata.db")
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+
+def connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db() -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS documents (
+                doc_id TEXT PRIMARY KEY,
+                url TEXT,
+                content_hash TEXT,
+                ingested_at TEXT,
+                chunk_count INTEGER
+            );
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chunks (
+                chunk_id TEXT PRIMARY KEY,
+                doc_id TEXT,
+                chunk_index INTEGER,
+                vector_id TEXT,
+                FOREIGN KEY (doc_id) REFERENCES documents(doc_id)
+            );
+            """
+        )
+
+===== services/ingestor/app/utils/ollama_embed.py =====
+from typing import List, Optional
+
+import httpx
+
+_EMBED_ENDPOINT_CACHE: Optional[str] = None
+
+_ENDPOINTS = [
+    {"path": "/api/embed", "payload_key": "input"},
+    {"path": "/api/embeddings", "payload_key": "prompt"},
+]
+
+
+def _extract_embedding(payload: dict) -> Optional[List[float]]:
+    if "embedding" in payload:
+        return payload["embedding"]
+    if "embeddings" in payload and payload["embeddings"]:
+        return payload["embeddings"][0]
+    if "data" in payload and payload["data"]:
+        return payload["data"][0].get("embedding")
+    return None
+
+
+def _iter_endpoints() -> List[dict]:
+    if _EMBED_ENDPOINT_CACHE:
+        cached = next((ep for ep in _ENDPOINTS if ep["path"] == _EMBED_ENDPOINT_CACHE), None)
+        if cached:
+            return [cached] + [ep for ep in _ENDPOINTS if ep["path"] != _EMBED_ENDPOINT_CACHE]
+    return list(_ENDPOINTS)
+
+
+def embed_text(host: str, model: str, text: str) -> List[float]:
+    global _EMBED_ENDPOINT_CACHE
+    with httpx.Client() as client:
+        for endpoint in _iter_endpoints():
+            response = client.post(
+                f"{host}{endpoint['path']}",
+                json={"model": model, endpoint["payload_key"]: text},
+                timeout=60.0,
+            )
+            if response.status_code == 404:
+                if _EMBED_ENDPOINT_CACHE == endpoint["path"]:
+                    _EMBED_ENDPOINT_CACHE = None
+                continue
+            response.raise_for_status()
+            payload = response.json()
+            embedding = _extract_embedding(payload)
+            if embedding is None:
+                raise ValueError(f"Missing embedding in response from {endpoint['path']}")
+            _EMBED_ENDPOINT_CACHE = endpoint["path"]
+            return embedding
+    raise RuntimeError(
+        f"Ollama embedding endpoint not found at {host}. Tried "
+        f"{', '.join(ep['path'] for ep in _ENDPOINTS)}. "
+        "Ensure the Ollama server supports embeddings."
+    )
+
+===== services/ingestor/app/ingest.py =====
+import json
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Set
+import yaml
+from qdrant_client import QdrantClient
+
+from app.utils.db import connect
+from app.utils.ollama_embed import embed_text
+from app.utils.qdrant import delete_by_doc_id, ensure_collection, upsert_vectors
+
+ARTIFACT_DIR = Path("/app/data/artifacts")
+CONFIG_PATH = Path("/app/config/system.yml")
+
+
+def _load_config(path: Path) -> Dict:
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def _load_embeddings(texts: List[str], host: str, model: str) -> List[List[float]]:
+    return [embed_text(host, model, text) for text in texts]
+
+
+def _doc_ids_on_disk() -> Set[str]:
+    return {path.parent.name for path in ARTIFACT_DIR.glob("*/artifact.json")}
+
+
+def ingest() -> None:
+    system_config = _load_config(CONFIG_PATH)
+    qdrant_host = system_config["qdrant"]["host"]
+    collection = system_config["qdrant"]["collection"]
+    embedding_model = system_config["ollama"]["embedding_model"]
+    ollama_host = system_config["ollama"]["host"]
+
+    client = QdrantClient(url=qdrant_host)
+    vector_size = len(embed_text(ollama_host, embedding_model, "dimension probe"))
+    ensure_collection(client, collection, vector_size=vector_size)
+
+    with connect() as conn:
+        disk_doc_ids = _doc_ids_on_disk()
+        stored_doc_ids = {
+            row["doc_id"]
+            for row in conn.execute("SELECT doc_id FROM documents").fetchall()
+        }
+        missing_doc_ids = stored_doc_ids - disk_doc_ids
+        for doc_id in missing_doc_ids:
+            delete_by_doc_id(client, collection, doc_id)
+            conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
+            conn.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
+            print(f"Deleted vectors for missing doc_id {doc_id}")
+        for artifact_path in ARTIFACT_DIR.glob("*/artifact.json"):
+            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+            doc_id = artifact["doc_id"]
+            content_hash = artifact["content_hash"]
+            row = conn.execute(
+                "SELECT content_hash FROM documents WHERE doc_id = ?", (doc_id,)
+            ).fetchone()
+            if row and row["content_hash"] == content_hash:
+                continue
+            if row:
+                delete_by_doc_id(client, collection, doc_id)
+                conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
+                conn.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
+
+            chunks_path = artifact_path.parent / "chunks.jsonl"
+            chunks = []
+            for line in chunks_path.read_text(encoding="utf-8").splitlines():
+                chunks.append(json.loads(line))
+
+            texts = [chunk["text"] for chunk in chunks]
+            vectors = _load_embeddings(texts, ollama_host, embedding_model)
+            ids = [chunk["chunk_id"] for chunk in chunks]
+            payloads = [
+                {
+                    "doc_id": doc_id,
+                    "chunk_id": chunk["chunk_id"],
+                    "url": artifact["url"],
+                    "title": artifact.get("title", ""),
+                    "text": chunk["text"],
+                }
+                for chunk in chunks
+            ]
+            upsert_vectors(client, collection, ids, vectors, payloads)
+
+            conn.execute(
+                "INSERT INTO documents (doc_id, url, content_hash, ingested_at, chunk_count) VALUES (?, ?, ?, ?, ?)",
+                (
+                    doc_id,
+                    artifact["url"],
+                    content_hash,
+                    datetime.utcnow().isoformat(),
+                    len(chunks),
+                ),
+            )
+            conn.executemany(
+                "INSERT INTO chunks (chunk_id, doc_id, chunk_index, vector_id) VALUES (?, ?, ?, ?)",
+                [
+                    (
+                        chunk["chunk_id"],
+                        doc_id,
+                        chunk["chunk_index"],
+                        chunk["chunk_id"],
+                    )
+                    for chunk in chunks
+                ],
+            )
+        conn.commit()
+
+===== services/ingestor/requirements.txt =====
+httpx==0.27.0
+PyYAML==6.0.1
+qdrant-client==1.7.3
+
+===== services/ingestor/Dockerfile =====
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+COPY app /app/app
+
+CMD ["python", "-m", "app.main"]
+
+===== services/crawler/app/discovery.py =====
+import json
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, Iterable, List
+from urllib.parse import urlparse
+
+import yaml
+
+from app.utils.url import canonicalize_url
+
+CONFIG_PATH = Path("/app/config/allow_block.yml")
+CRAWLER_CONFIG = Path("/app/config/crawler.yml")
+CANDIDATE_PATH = Path("/app/data/candidates/candidates.jsonl")
+
+
+def load_allow_block() -> Dict[str, List[str]]:
+    return yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
+
+
+def load_crawler_config() -> Dict[str, Dict[str, List[str]]]:
+    return yaml.safe_load(CRAWLER_CONFIG.read_text(encoding="utf-8")) or {}
+
+
+def is_allowed(url: str, config: Dict[str, List[str]]) -> bool:
+    parsed = urlparse(url)
+    host = parsed.netloc
+    path = parsed.path or "/"
+    if host in config.get("blocked_domains", []):
+        return False
+    for blocked in config.get("blocked_paths", []):
+        if path.startswith(blocked):
+            return False
+    allowed_domains = config.get("allowed_domains", [])
+    if allowed_domains and host not in allowed_domains:
+        return False
+    return True
+
+
+def append_candidates(urls: Iterable[str], source: str, depth: int) -> None:
+    crawler_config = load_crawler_config()
+    max_depth = crawler_config.get("max_depth", 0)
+    if depth > max_depth:
+        return
+    url_config = crawler_config.get("url_canonicalization", {})
+    seen = set()
+    if CANDIDATE_PATH.exists():
+        for line in CANDIDATE_PATH.read_text(encoding="utf-8").splitlines():
+            try:
+                entry = json.loads(line)
+                seen.add(entry.get("url"))
+            except json.JSONDecodeError:
+                continue
+    CANDIDATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with CANDIDATE_PATH.open("a", encoding="utf-8") as handle:
+        for url in urls:
+            canonical = canonicalize_url(url, url_config)
+            if canonical in seen:
+                continue
+            record = {
+                "url": canonical,
+                "discovered_at": datetime.utcnow().isoformat() + "Z",
+                "source": source,
+                "depth": depth,
+            }
+            handle.write(json.dumps(record) + "\n")
+            seen.add(canonical)
+
+===== services/crawler/app/main.py =====
+import json
+import logging
+from pathlib import Path
+
+import yaml
+
+from app.capture import capture_and_discover
+from app.discovery import append_candidates, is_allowed, load_allow_block, load_crawler_config
+
+CONFIG_PATH = Path("/app/config/allow_block.yml")
+CANDIDATE_PATH = Path("/app/data/candidates/candidates.jsonl")
+PROCESSED_PATH = Path("/app/data/candidates/processed.json")
+
+
+def load_seeds():
+    config = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
+    return config.get("seed_urls", [])
+
+
+def _load_processed() -> set:
+    if not PROCESSED_PATH.exists():
+        return set()
+    try:
+        data = json.loads(PROCESSED_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return set()
+    return set(data or [])
+
+
+def _save_processed(processed: set) -> None:
+    PROCESSED_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PROCESSED_PATH.write_text(json.dumps(sorted(processed)), encoding="utf-8")
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    config = load_allow_block()
+    crawler_config = load_crawler_config()
+    max_depth = crawler_config.get("max_depth", 0)
+    seeds = load_seeds()
+    append_candidates(seeds, "seed", 0)
+    if not CANDIDATE_PATH.exists():
+        return
+    processed = _load_processed()
+    for line in CANDIDATE_PATH.read_text(encoding="utf-8").splitlines():
+        entry = json.loads(line)
+        url = entry.get("url")
+        depth = entry.get("depth", 0)
+        if not url:
+            continue
+        if url in processed:
+            continue
+        if depth > max_depth:
+            processed.add(url)
+            _save_processed(processed)
+            continue
+        if not is_allowed(url, config):
+            processed.add(url)
+            _save_processed(processed)
+            continue
+        try:
+            capture_and_discover(url, depth)
+        except Exception as exc:
+            logging.error("Error capturing %s: %s", url, exc)
+        processed.add(url)
+        _save_processed(processed)
+
+
+if __name__ == "__main__":
+    main()
+
+===== services/crawler/app/utils/url.py =====
+import hashlib
+from typing import Dict, List
+from urllib.parse import parse_qsl, urlparse, urlunparse
+
+
+def canonicalize_url(url: str, config: Dict[str, List[str]]) -> str:
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    host = parsed.netloc.lower()
+
+    path = parsed.path or "/"
+    if path != "/" and path.endswith("/"):
+        path = path[:-1]
+
+    query_params = parse_qsl(parsed.query, keep_blank_values=True)
+    preserve = set(config.get("preserve_query_params", []))
+    blocked = set(config.get("blocked_params", []))
+    filtered_params = []
+    for key, value in query_params:
+        if key in blocked or key.startswith("utm_"):
+            continue
+        if preserve:
+            if key in preserve:
+                filtered_params.append((key, value))
+        else:
+            continue
+
+    query = "&".join([f"{k}={v}" for k, v in filtered_params])
+    normalized = urlunparse((scheme, host, path, "", query, ""))
+    return normalized
+
+
+def doc_id_for_url(canonical_url: str) -> str:
+    return hashlib.sha256(canonical_url.encode("utf-8")).hexdigest()
+
+===== services/crawler/app/capture.py =====
+import hashlib
+import json
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Tuple
+from urllib.parse import urljoin
+
+import httpx
+import tiktoken
+import yaml
+from bs4 import BeautifulSoup
+
+from app.discovery import append_candidates
+from app.utils.url import canonicalize_url, doc_id_for_url
+
+CONFIG_PATH = Path("/app/config/crawler.yml")
+INGEST_CONFIG_PATH = Path("/app/config/ingest.yml")
+
+ARTIFACT_DIR = Path("/app/data/artifacts")
+
+
+def _load_config(path: Path) -> Dict:
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def _chunk_text(text: str, size: int, overlap: int) -> List[str]:
+    encoder = tiktoken.get_encoding("cl100k_base")
+    tokens = encoder.encode(text)
+    chunks = []
+    start = 0
+    while start < len(tokens):
+        end = min(start + size, len(tokens))
+        chunk_tokens = tokens[start:end]
+        chunks.append(encoder.decode(chunk_tokens))
+        start = end - overlap
+        if start < 0:
+            start = 0
+        if end == len(tokens):
+            break
+    return chunks
+
+
+def _content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def capture_url(url: str) -> Tuple[str, List[str]]:
+    crawler_config = _load_config(CONFIG_PATH)
+    ingest_config = _load_config(INGEST_CONFIG_PATH)
+    url_config = crawler_config.get("url_canonicalization", {})
+    canonical = canonicalize_url(url, url_config)
+
+    headers = {"User-Agent": crawler_config.get("user_agent", "RagAI-Crawler/1.0")}
+    delay = crawler_config.get("request_delay", 1.0)
+    timeout = crawler_config.get("timeout", 30)
+
+    time.sleep(delay)
+    response = httpx.get(canonical, headers=headers, timeout=timeout)
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    title = soup.title.string.strip() if soup.title and soup.title.string else ""
+    if not title:
+        h1 = soup.find("h1")
+        if h1:
+            title = h1.get_text(strip=True)
+    text = " ".join(soup.get_text(separator=" ").split())
+
+    links = []
+    for tag in soup.find_all("a"):
+        href = tag.get("href")
+        if not href:
+            continue
+        links.append(urljoin(canonical, href))
+
+    doc_id = doc_id_for_url(canonical)
+    content_hash = _content_hash(text)
+    artifact_path = ARTIFACT_DIR / doc_id
+    artifact_path.mkdir(parents=True, exist_ok=True)
+
+    artifact = {
+        "doc_id": doc_id,
+        "url": canonical,
+        "canonical_url": canonical,
+        "content_hash": content_hash,
+        "fetched_at": datetime.utcnow().isoformat() + "Z",
+        "title": title,
+        "text": text,
+    }
+    (artifact_path / "artifact.json").write_text(
+        json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    chunking = ingest_config.get("chunking", {})
+    chunks = _chunk_text(
+        text,
+        size=chunking.get("chunk_size", 512),
+        overlap=chunking.get("chunk_overlap", 128),
+    )
+    chunks_path = artifact_path / "chunks.jsonl"
+    with chunks_path.open("w", encoding="utf-8") as handle:
+        for index, chunk_text in enumerate(chunks):
+            record = {
+                "chunk_id": f"{doc_id}_{index}",
+                "doc_id": doc_id,
+                "chunk_index": index,
+                "text": chunk_text,
+            }
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    return canonical, links
+
+
+def capture_and_discover(url: str, source_depth: int) -> None:
+    canonical, links = capture_url(url)
+    append_candidates(links, canonical, source_depth + 1)
+
+===== services/crawler/requirements.txt =====
+httpx==0.27.0
+beautifulsoup4==4.12.3
+PyYAML==6.0.1
+tiktoken==0.6.0
+
+===== services/crawler/Dockerfile =====
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+COPY app /app/app
+
+CMD ["python", "-m", "app.main"]
+
+===== services/api/app/main.py =====
+from fastapi import FastAPI
+
+from app.routes import admin, chat
+from app.utils.db import init_db
+from app.utils.logging import setup_logging
+
+app = FastAPI()
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    setup_logging()
+    init_db()
+
+
+app.include_router(chat.router)
+app.include_router(admin.router)
+
+===== services/api/app/utils/config.py =====
+import signal
+from pathlib import Path
+from typing import Any, Dict
+
+import yaml
+
+CONFIG_DIR = Path("/app/config")
+
+_cache: Dict[str, Any] = {}
+
+
+def _load_yaml(path: Path) -> Dict[str, Any]:
+    with path.open("r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle) or {}
+
+
+def load_config(name: str) -> Dict[str, Any]:
+    if name not in _cache:
+        _cache[name] = _load_yaml(CONFIG_DIR / f"{name}.yml")
+    return _cache[name]
+
+
+def refresh_config(name: str) -> Dict[str, Any]:
+    _cache[name] = _load_yaml(CONFIG_DIR / f"{name}.yml")
+    return _cache[name]
+
+
+def load_agents_config() -> Dict[str, Any]:
+    return load_config("agents")
+
+
+def load_system_config() -> Dict[str, Any]:
+    return load_config("system")
+
+
+def reload_all(_: int, __: Any) -> None:
+    for name in ("agents", "system", "allow_block", "crawler", "ingest"):
+        refresh_config(name)
+
+
+signal.signal(signal.SIGHUP, reload_all)
+
+===== services/api/app/utils/logging.py =====
+import logging
+
+
+def setup_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+===== services/api/app/utils/jobs.py =====
+import threading
+import uuid
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Callable, Dict, Optional
+
+JOB_LOG_DIR = Path("/app/data/logs/jobs")
+JOB_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+@dataclass
+class JobRecord:
+    job_id: str
+    job_type: str
+    status: str
+    started_at: str
+    ended_at: Optional[str]
+
+
+_jobs: Dict[str, JobRecord] = {}
+
+
+def _write_log(job_id: str, message: str) -> None:
+    log_path = JOB_LOG_DIR / f"{job_id}.log"
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(message + "\n")
+
+
+def start_job(job_type: str, worker: Callable[[Callable[[str], None]], None]) -> JobRecord:
+    job_id = str(uuid.uuid4())
+    record = JobRecord(
+        job_id=job_id,
+        job_type=job_type,
+        status="running",
+        started_at=datetime.utcnow().isoformat(),
+        ended_at=None,
+    )
+    _jobs[job_id] = record
+
+    def run() -> None:
+        try:
+            worker(lambda message: _write_log(job_id, message))
+            record.status = "completed"
+        except Exception as exc:  # pragma: no cover - log errors
+            record.status = "failed"
+            _write_log(job_id, f"ERROR: {exc}")
+            raise
+        finally:
+            record.ended_at = datetime.utcnow().isoformat()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return record
+
+
+def list_jobs() -> Dict[str, JobRecord]:
+    return _jobs
+
+
+def get_job(job_id: str) -> Optional[JobRecord]:
+    return _jobs.get(job_id)
+
+
+def delete_job(job_id: str) -> None:
+    _jobs.pop(job_id, None)
+    log_path = JOB_LOG_DIR / f"{job_id}.log"
+    if log_path.exists():
+        log_path.unlink()
+
+===== services/api/app/utils/ollama.py =====
+import json
+from typing import Any, Dict, Type, TypeVar
+
+import httpx
+from pydantic import BaseModel, ValidationError
+
+from app.utils.config import load_system_config
+
+T = TypeVar("T", bound=BaseModel)
+
+
+async def call_ollama_json(prompt: str, schema: Type[T]) -> T:
+    config = load_system_config()
+    host = config["ollama"]["host"]
+    model = config["ollama"]["model"]
+
+    async with httpx.AsyncClient() as client:
+        for _ in range(3):
+            response = await client.post(
+                f"{host}/api/generate",
+                json={
+                    "model": model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "format": "json",
+                },
+                timeout=60.0,
+            )
+            response.raise_for_status()
+            payload: Dict[str, Any] = response.json()
+            try:
+                output_json = json.loads(payload["response"])
+                return schema(**output_json)
+            except (json.JSONDecodeError, ValidationError):
+                continue
+        raise ValueError("Unable to validate response from model")
+
+===== services/api/app/utils/embeddings.py =====
+from typing import List
+
+from app.utils.config import load_system_config
+from app.utils.ollama_embed import embed_text_async
+
+
+async def embed_text(text: str) -> List[float]:
+    config = load_system_config()
+    host = config["ollama"]["host"]
+    model = config["ollama"]["embedding_model"]
+    return await embed_text_async(host, model, text)
+
+===== services/api/app/utils/db.py =====
+import json
+import sqlite3
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+DB_PATH = Path("/app/data/conversations/conversations.db")
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db() -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS conversations (
+                id TEXT PRIMARY KEY,
+                created_at TEXT,
+                updated_at TEXT,
+                title TEXT,
+                summary TEXT
+            );
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS messages (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT,
+                timestamp TEXT,
+                role TEXT,
+                content TEXT,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            );
+            """
+        )
+
+
+def create_conversation() -> str:
+    conversation_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO conversations (id, created_at, updated_at, title, summary) VALUES (?, ?, ?, ?, ?)",
+            (conversation_id, now, now, "New Conversation", ""),
+        )
+    return conversation_id
+
+
+def list_conversations() -> List[Dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute("SELECT * FROM conversations ORDER BY updated_at DESC").fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_conversation(conversation_id: str, title: str) -> None:
+    now = datetime.utcnow().isoformat()
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
+            (title, now, conversation_id),
+        )
+
+
+def delete_conversation(conversation_id: str) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+
+
+def add_message(conversation_id: str, role: str, content: Dict[str, Any]) -> None:
+    message_id = str(uuid.uuid4())
+    timestamp = datetime.utcnow().isoformat()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO messages (id, conversation_id, timestamp, role, content)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (message_id, conversation_id, timestamp, role, json.dumps(content)),
+        )
+        conn.execute(
+            "UPDATE conversations SET updated_at = ? WHERE id = ?",
+            (timestamp, conversation_id),
+        )
+
+
+def list_messages(conversation_id: str) -> List[Dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC",
+            (conversation_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+===== services/api/app/utils/ollama_embed.py =====
+from typing import List, Optional
+
+import httpx
+
+_EMBED_ENDPOINT_CACHE: Optional[str] = None
+
+_ENDPOINTS = [
+    {"path": "/api/embed", "payload_key": "input"},
+    {"path": "/api/embeddings", "payload_key": "prompt"},
+]
+
+
+def _extract_embedding(payload: dict) -> Optional[List[float]]:
+    if "embedding" in payload:
+        return payload["embedding"]
+    if "embeddings" in payload and payload["embeddings"]:
+        return payload["embeddings"][0]
+    if "data" in payload and payload["data"]:
+        return payload["data"][0].get("embedding")
+    return None
+
+
+def _iter_endpoints() -> List[dict]:
+    if _EMBED_ENDPOINT_CACHE:
+        cached = next((ep for ep in _ENDPOINTS if ep["path"] == _EMBED_ENDPOINT_CACHE), None)
+        if cached:
+            return [cached] + [ep for ep in _ENDPOINTS if ep["path"] != _EMBED_ENDPOINT_CACHE]
+    return list(_ENDPOINTS)
+
+
+def embed_text(host: str, model: str, text: str) -> List[float]:
+    global _EMBED_ENDPOINT_CACHE
+    with httpx.Client() as client:
+        for endpoint in _iter_endpoints():
+            response = client.post(
+                f"{host}{endpoint['path']}",
+                json={"model": model, endpoint["payload_key"]: text},
+                timeout=60.0,
+            )
+            if response.status_code == 404:
+                if _EMBED_ENDPOINT_CACHE == endpoint["path"]:
+                    _EMBED_ENDPOINT_CACHE = None
+                continue
+            response.raise_for_status()
+            payload = response.json()
+            embedding = _extract_embedding(payload)
+            if embedding is None:
+                raise ValueError(f"Missing embedding in response from {endpoint['path']}")
+            _EMBED_ENDPOINT_CACHE = endpoint["path"]
+            return embedding
+    raise RuntimeError(
+        f"Ollama embedding endpoint not found at {host}. Tried "
+        f"{', '.join(ep['path'] for ep in _ENDPOINTS)}. "
+        "Ensure the Ollama server supports embeddings."
+    )
+
+
+async def embed_text_async(host: str, model: str, text: str) -> List[float]:
+    global _EMBED_ENDPOINT_CACHE
+    async with httpx.AsyncClient() as client:
+        for endpoint in _iter_endpoints():
+            response = await client.post(
+                f"{host}{endpoint['path']}",
+                json={"model": model, endpoint["payload_key"]: text},
+                timeout=60.0,
+            )
+            if response.status_code == 404:
+                if _EMBED_ENDPOINT_CACHE == endpoint["path"]:
+                    _EMBED_ENDPOINT_CACHE = None
+                continue
+            response.raise_for_status()
+            payload = response.json()
+            embedding = _extract_embedding(payload)
+            if embedding is None:
+                raise ValueError(f"Missing embedding in response from {endpoint['path']}")
+            _EMBED_ENDPOINT_CACHE = endpoint["path"]
+            return embedding
+    raise RuntimeError(
+        f"Ollama embedding endpoint not found at {host}. Tried "
+        f"{', '.join(ep['path'] for ep in _ENDPOINTS)}. "
+        "Ensure the Ollama server supports embeddings."
+    )
+
+===== services/api/app/models/schemas.py =====
+from typing import List, Optional
+
+from pydantic import BaseModel
+
+
+class IntentOutput(BaseModel):
+    intent_label: str
+    search_queries: List[str]
+    success_criteria: List[str]
+    context: Optional[str] = None
+
+
+class ResearchHit(BaseModel):
+    doc_id: str
+    chunk_id: str
+    url: str
+    title: str
+    score: float
+    text: str
+
+
+class ResearchOutput(BaseModel):
+    hits: List[ResearchHit]
+    total_results: int
+
+
+class SynthesisOutput(BaseModel):
+    draft_answer: str
+    citations_used: List[str]
+
+
+class ValidationOutput(BaseModel):
+    status: str
+    final_answer: Optional[str] = None
+    needs_clarification: bool
+    clarifying_question: Optional[str] = None
+    reasoning: Optional[str] = None
+
+===== services/api/app/workers/crawl_worker.py =====
+import json
+import logging
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, Iterable, List, Set
+from urllib.parse import parse_qsl, urljoin, urlparse, urlunparse
+
+import httpx
+import tiktoken
+import yaml
+from bs4 import BeautifulSoup
+
+ALLOW_BLOCK_PATH = Path("/app/config/allow_block.yml")
+CRAWLER_CONFIG_PATH = Path("/app/config/crawler.yml")
+INGEST_CONFIG_PATH = Path("/app/config/ingest.yml")
+ARTIFACT_DIR = Path("/app/data/artifacts")
+CANDIDATE_PATH = Path("/app/data/candidates/candidates.jsonl")
+PROCESSED_PATH = Path("/app/data/candidates/processed.json")
+
+
+def _load_config(path: Path) -> Dict:
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def _load_allow_block() -> Dict[str, List[str]]:
+    return _load_config(ALLOW_BLOCK_PATH)
+
+
+def _load_crawler_config() -> Dict:
+    return _load_config(CRAWLER_CONFIG_PATH)
+
+
+def _canonicalize_url(url: str, config: Dict[str, List[str]]) -> str:
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    host = parsed.netloc.lower()
+    path = parsed.path or "/"
+    if path != "/" and path.endswith("/"):
+        path = path[:-1]
+    query_params = parse_qsl(parsed.query, keep_blank_values=True)
+    preserve = set(config.get("preserve_query_params", []))
+    blocked = set(config.get("blocked_params", []))
+    filtered_params = []
+    for key, value in query_params:
+        if key in blocked or key.startswith("utm_"):
+            continue
+        if preserve:
+            if key in preserve:
+                filtered_params.append((key, value))
+        else:
+            continue
+    query = "&".join([f"{k}={v}" for k, v in filtered_params])
+    return urlunparse((scheme, host, path, "", query, ""))
+
+
+def _doc_id_for_url(canonical_url: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(canonical_url.encode("utf-8")).hexdigest()
+
+
+def _is_allowed(url: str, config: Dict[str, List[str]]) -> bool:
+    parsed = urlparse(url)
+    host = parsed.netloc
+    path = parsed.path or "/"
+    if host in config.get("blocked_domains", []):
+        return False
+    for blocked in config.get("blocked_paths", []):
+        if path.startswith(blocked):
+            return False
+    allowed_domains = config.get("allowed_domains", [])
+    if allowed_domains and host not in allowed_domains:
+        return False
+    return True
+
+
+def _load_processed() -> Set[str]:
+    if not PROCESSED_PATH.exists():
+        return set()
+    try:
+        return set(json.loads(PROCESSED_PATH.read_text(encoding="utf-8")) or [])
+    except json.JSONDecodeError:
+        return set()
+
+
+def _save_processed(processed: Set[str]) -> None:
+    PROCESSED_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PROCESSED_PATH.write_text(json.dumps(sorted(processed)), encoding="utf-8")
+
+
+def _append_candidates(urls: Iterable[str], source: str, depth: int, max_depth: int) -> None:
+    if depth > max_depth:
+        return
+    crawler_config = _load_crawler_config()
+    url_config = crawler_config.get("url_canonicalization", {})
+    seen = set()
+    if CANDIDATE_PATH.exists():
+        for line in CANDIDATE_PATH.read_text(encoding="utf-8").splitlines():
+            try:
+                entry = json.loads(line)
+                seen.add(entry.get("url"))
+            except json.JSONDecodeError:
+                continue
+    CANDIDATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with CANDIDATE_PATH.open("a", encoding="utf-8") as handle:
+        for url in urls:
+            canonical = _canonicalize_url(url, url_config)
+            if canonical in seen:
+                continue
+            record = {
+                "url": canonical,
+                "discovered_at": datetime.utcnow().isoformat() + "Z",
+                "source": source,
+                "depth": depth,
+            }
+            handle.write(json.dumps(record) + "\n")
+            seen.add(canonical)
+
+
+def _chunk_text(text: str, size: int, overlap: int) -> List[str]:
+    encoder = tiktoken.get_encoding("cl100k_base")
+    tokens = encoder.encode(text)
+    chunks = []
+    start = 0
+    while start < len(tokens):
+        end = min(start + size, len(tokens))
+        chunk_tokens = tokens[start:end]
+        chunks.append(encoder.decode(chunk_tokens))
+        start = end - overlap
+        if start < 0:
+            start = 0
+        if end == len(tokens):
+            break
+    return chunks
+
+
+def _content_hash(text: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _capture_url(url: str) -> List[str]:
+    crawler_config = _load_crawler_config()
+    ingest_config = _load_config(INGEST_CONFIG_PATH)
+    url_config = crawler_config.get("url_canonicalization", {})
+    canonical = _canonicalize_url(url, url_config)
+    headers = {"User-Agent": crawler_config.get("user_agent", "RagAI-Crawler/1.0")}
+    delay = crawler_config.get("request_delay", 1.0)
+    timeout = crawler_config.get("timeout", 30)
+    time.sleep(delay)
+    response = httpx.get(canonical, headers=headers, timeout=timeout)
+    response.raise_for_status()
+    soup = BeautifulSoup(response.text, "html.parser")
+    title = soup.title.string.strip() if soup.title and soup.title.string else ""
+    if not title:
+        h1 = soup.find("h1")
+        if h1:
+            title = h1.get_text(strip=True)
+    text = " ".join(soup.get_text(separator=" ").split())
+    links = []
+    for tag in soup.find_all("a"):
+        href = tag.get("href")
+        if not href:
+            continue
+        links.append(urljoin(canonical, href))
+    doc_id = _doc_id_for_url(canonical)
+    content_hash = _content_hash(text)
+    artifact_path = ARTIFACT_DIR / doc_id
+    artifact_path.mkdir(parents=True, exist_ok=True)
+    artifact = {
+        "doc_id": doc_id,
+        "url": canonical,
+        "canonical_url": canonical,
+        "content_hash": content_hash,
+        "fetched_at": datetime.utcnow().isoformat() + "Z",
+        "title": title,
+        "text": text,
+    }
+    (artifact_path / "artifact.json").write_text(
+        json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    chunking = ingest_config.get("chunking", {})
+    chunks = _chunk_text(
+        text,
+        size=chunking.get("chunk_size", 512),
+        overlap=chunking.get("chunk_overlap", 128),
+    )
+    chunks_path = artifact_path / "chunks.jsonl"
+    with chunks_path.open("w", encoding="utf-8") as handle:
+        for index, chunk_text in enumerate(chunks):
+            record = {
+                "chunk_id": f"{doc_id}_{index}",
+                "doc_id": doc_id,
+                "chunk_index": index,
+                "text": chunk_text,
+            }
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    return links
+
+
+def run_crawl_job(log) -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    allow_block = _load_allow_block()
+    crawler_config = _load_crawler_config()
+    max_depth = crawler_config.get("max_depth", 0)
+    seeds = allow_block.get("seed_urls", [])
+    log(f"Starting crawl job with {len(seeds)} seed(s)")
+    _append_candidates(seeds, "seed", 0, max_depth)
+    if not CANDIDATE_PATH.exists():
+        log("No candidates to process.")
+        return
+    processed = _load_processed()
+    candidates = CANDIDATE_PATH.read_text(encoding="utf-8").splitlines()
+    log(f"Loaded {len(candidates)} candidate(s)")
+    for line in candidates:
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        url = entry.get("url")
+        depth = entry.get("depth", 0)
+        if not url:
+            continue
+        if url in processed:
+            continue
+        if depth > max_depth:
+            processed.add(url)
+            _save_processed(processed)
+            continue
+        if not _is_allowed(url, allow_block):
+            processed.add(url)
+            _save_processed(processed)
+            continue
+        log(f"Crawling {url} (depth {depth})")
+        try:
+            links = _capture_url(url)
+            _append_candidates(links, url, depth + 1, max_depth)
+            log(f"Captured {url} with {len(links)} link(s)")
+        except Exception as exc:
+            log(f"Error capturing {url}: {exc}")
+        processed.add(url)
+        _save_processed(processed)
+    log("Crawl job complete")
+
+===== services/api/app/workers/ingest_worker.py =====
+import json
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Set
+
+import yaml
+from qdrant_client import QdrantClient
+from qdrant_client.http import models as rest
+
+from app.utils.ollama_embed import embed_text
+
+ARTIFACT_DIR = Path("/app/data/artifacts")
+CONFIG_PATH = Path("/app/config/system.yml")
+DB_PATH = Path("/app/data/ingest/metadata.db")
+
+
+def _load_config(path: Path) -> Dict:
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def _connect() -> sqlite3.Connection:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _init_db(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS documents (
+            doc_id TEXT PRIMARY KEY,
+            url TEXT,
+            content_hash TEXT,
+            ingested_at TEXT,
+            chunk_count INTEGER
+        );
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chunks (
+            chunk_id TEXT PRIMARY KEY,
+            doc_id TEXT,
+            chunk_index INTEGER,
+            vector_id TEXT,
+            FOREIGN KEY (doc_id) REFERENCES documents(doc_id)
+        );
+        """
+    )
+
+
+def _ensure_collection(client: QdrantClient, collection: str, vector_size: int) -> None:
+    collections = client.get_collections().collections
+    if any(col.name == collection for col in collections):
+        info = client.get_collection(collection)
+        existing_size = info.config.params.vectors.size
+        if existing_size != vector_size:
+            raise ValueError(
+                f"Qdrant collection '{collection}' has vector size {existing_size}, "
+                f"expected {vector_size}. Clear vectors or use a matching embedding model."
+            )
+        return
+    client.create_collection(
+        collection_name=collection,
+        vectors_config=rest.VectorParams(size=vector_size, distance=rest.Distance.COSINE),
+    )
+    client.create_payload_index(collection_name=collection, field_name="doc_id", field_schema="keyword")
+
+
+def _delete_by_doc_id(client: QdrantClient, collection: str, doc_id: str) -> None:
+    client.delete(
+        collection_name=collection,
+        points_selector=rest.Filter(
+            must=[rest.FieldCondition(key="doc_id", match=rest.MatchValue(value=doc_id))]
+        ),
+    )
+
+
+def _upsert_vectors(
+    client: QdrantClient,
+    collection: str,
+    ids: List[str],
+    vectors: List[List[float]],
+    payloads: List[dict],
+) -> None:
+    client.upsert(
+        collection_name=collection,
+        points=rest.Batch(ids=ids, vectors=vectors, payloads=payloads),
+    )
+
+
+def _load_embeddings(texts: List[str], host: str, model: str) -> List[List[float]]:
+    return [embed_text(host, model, text) for text in texts]
+
+
+def _doc_ids_on_disk() -> Set[str]:
+    return {path.parent.name for path in ARTIFACT_DIR.glob("*/artifact.json")}
+
+
+def run_ingest_job(log) -> None:
+    system_config = _load_config(CONFIG_PATH)
+    qdrant_host = system_config["qdrant"]["host"]
+    collection = system_config["qdrant"]["collection"]
+    embedding_model = system_config["ollama"]["embedding_model"]
+    ollama_host = system_config["ollama"]["host"]
+    client = QdrantClient(url=qdrant_host)
+    vector_size = len(embed_text(ollama_host, embedding_model, "dimension probe"))
+    _ensure_collection(client, collection, vector_size=vector_size)
+    log("Starting ingest job")
+    with _connect() as conn:
+        _init_db(conn)
+        disk_doc_ids = _doc_ids_on_disk()
+        stored_doc_ids = {
+            row["doc_id"]
+            for row in conn.execute("SELECT doc_id FROM documents").fetchall()
+        }
+        missing_doc_ids = stored_doc_ids - disk_doc_ids
+        for doc_id in missing_doc_ids:
+            _delete_by_doc_id(client, collection, doc_id)
+            conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
+            conn.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
+            log(f"Deleted vectors for missing doc_id {doc_id}")
+        artifact_files = list(ARTIFACT_DIR.glob("*/artifact.json"))
+        log(f"Found {len(artifact_files)} artifact(s)")
+        for artifact_path in artifact_files:
+            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+            doc_id = artifact["doc_id"]
+            content_hash = artifact["content_hash"]
+            row = conn.execute(
+                "SELECT content_hash FROM documents WHERE doc_id = ?", (doc_id,)
+            ).fetchone()
+            if row and row["content_hash"] == content_hash:
+                continue
+            if row:
+                _delete_by_doc_id(client, collection, doc_id)
+                conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
+                conn.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
+                log(f"Refreshing vectors for {doc_id}")
+            chunks_path = artifact_path.parent / "chunks.jsonl"
+            chunks = []
+            for line in chunks_path.read_text(encoding="utf-8").splitlines():
+                chunks.append(json.loads(line))
+            texts = [chunk["text"] for chunk in chunks]
+            vectors = _load_embeddings(texts, ollama_host, embedding_model)
+            ids = [chunk["chunk_id"] for chunk in chunks]
+            payloads = [
+                {
+                    "doc_id": doc_id,
+                    "chunk_id": chunk["chunk_id"],
+                    "url": artifact["url"],
+                    "title": artifact.get("title", ""),
+                    "text": chunk["text"],
+                }
+                for chunk in chunks
+            ]
+            _upsert_vectors(client, collection, ids, vectors, payloads)
+            conn.execute(
+                "INSERT INTO documents (doc_id, url, content_hash, ingested_at, chunk_count) VALUES (?, ?, ?, ?, ?)",
+                (
+                    doc_id,
+                    artifact["url"],
+                    content_hash,
+                    datetime.utcnow().isoformat(),
+                    len(chunks),
+                ),
+            )
+            conn.executemany(
+                "INSERT INTO chunks (chunk_id, doc_id, chunk_index, vector_id) VALUES (?, ?, ?, ?)",
+                [
+                    (
+                        chunk["chunk_id"],
+                        doc_id,
+                        chunk["chunk_index"],
+                        chunk["chunk_id"],
+                    )
+                    for chunk in chunks
+                ],
+            )
+        conn.commit()
+    log("Ingest job complete")
+
+===== services/api/app/routes/admin.py =====
+import asyncio
+from pathlib import Path
+from typing import Any, AsyncGenerator, Dict, List
+
+import yaml
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+
+from app.utils.config import refresh_config
+from app.utils.jobs import delete_job, get_job, list_jobs, start_job
+from app.workers.crawl_worker import run_crawl_job
+from app.workers.ingest_worker import run_ingest_job
+
+router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+SECRETS_PATH = Path("/app/secrets/admin_tokens")
+CONFIG_DIR = Path("/app/config")
+
+
+def _load_tokens() -> List[str]:
+    if not SECRETS_PATH.exists():
+        return []
+    return [line.strip() for line in SECRETS_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+@router.post("/unlock")
+async def unlock(payload: Dict[str, str]) -> Dict[str, str]:
+    token = payload.get("token")
+    if not token:
+        raise HTTPException(status_code=400, detail="Missing token")
+    if token not in _load_tokens():
+        raise HTTPException(status_code=403, detail="Invalid token")
+    return {"status": "ok"}
+
+
+@router.get("/config/{name}")
+async def get_config(name: str) -> Dict[str, Any]:
+    path = CONFIG_DIR / f"{name}.yml"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Config not found")
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+@router.put("/config/{name}")
+async def update_config(name: str, payload: Dict[str, Any]) -> Dict[str, str]:
+    path = CONFIG_DIR / f"{name}.yml"
+    try:
+        yaml.safe_dump(payload)
+    except yaml.YAMLError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    refresh_config(name)
+    return {"status": "ok"}
+
+
+@router.post("/crawl")
+async def trigger_crawl() -> Dict[str, str]:
+    job = start_job("crawl", run_crawl_job)
+    return {"job_id": job.job_id}
+
+
+@router.post("/ingest")
+async def trigger_ingest() -> Dict[str, str]:
+    job = start_job("ingest", run_ingest_job)
+    return {"job_id": job.job_id}
+
+
+@router.get("/jobs")
+async def get_jobs() -> List[Dict[str, Any]]:
+    return [job.__dict__ for job in list_jobs().values()]
+
+
+@router.get("/jobs/{job_id}")
+async def get_job_detail(job_id: str) -> Dict[str, Any]:
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job.__dict__
+
+
+async def _tail_log(job_id: str) -> AsyncGenerator[str, None]:
+    log_path = Path("/app/data/logs/jobs") / f"{job_id}.log"
+    if not log_path.exists():
+        yield f"data: {job_id} not found\n\n"
+        return
+    with log_path.open("r", encoding="utf-8") as handle:
+        while True:
+            line = handle.readline()
+            if line:
+                yield f"data: {line.strip()}\n\n"
+            else:
+                await asyncio.sleep(1.0)
+
+
+@router.get("/jobs/{job_id}/log")
+async def stream_log(job_id: str) -> StreamingResponse:
+    return StreamingResponse(_tail_log(job_id), media_type="text/event-stream")
+
+
+@router.delete("/jobs/{job_id}")
+async def remove_job(job_id: str) -> Dict[str, str]:
+    delete_job(job_id)
+    return {"status": "ok"}
+
+===== services/api/app/routes/chat.py =====
+import asyncio
+import json
+from datetime import datetime
+from typing import Any, AsyncGenerator, Dict, List
+
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+from qdrant_client import QdrantClient
+
+from app.agents.intent import analyze_intent
+from app.agents.research import summarize_research
+from app.agents.synthesis import synthesize_answer
+from app.agents.validation import validate_answer
+from app.utils.config import load_system_config
+from app.utils.db import (
+    add_message,
+    create_conversation,
+    delete_conversation,
+    get_conversation,
+    list_conversations,
+    list_messages,
+    update_conversation,
+)
+from app.utils.embeddings import embed_text
+
+router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+
+@router.post("/start")
+async def start_conversation() -> Dict[str, str]:
+    conversation_id = create_conversation()
+    return {"conversation_id": conversation_id}
+
+
+@router.get("/list")
+async def get_conversations() -> List[Dict[str, Any]]:
+    return list_conversations()
+
+
+@router.get("/{conversation_id}")
+async def get_conversation_detail(conversation_id: str) -> Dict[str, Any]:
+    conversation = get_conversation(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    messages = list_messages(conversation_id)
+    return {"conversation": conversation, "messages": messages}
+
+
+@router.put("/{conversation_id}")
+async def rename_conversation(conversation_id: str, payload: Dict[str, str]) -> Dict[str, str]:
+    if "title" not in payload:
+        raise HTTPException(status_code=400, detail="Missing title")
+    update_conversation(conversation_id, payload["title"])
+    return {"status": "ok"}
+
+
+@router.delete("/{conversation_id}")
+async def remove_conversation(conversation_id: str) -> Dict[str, str]:
+    delete_conversation(conversation_id)
+    return {"status": "ok"}
+
+
+@router.get("/{conversation_id}/export")
+async def export_conversation(conversation_id: str) -> Dict[str, Any]:
+    conversation = get_conversation(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    messages = list_messages(conversation_id)
+    return {
+        "conversation": conversation,
+        "messages": messages,
+        "exported_at": datetime.utcnow().isoformat(),
+    }
+
+
+def _format_sse(data: Dict[str, Any]) -> str:
+    return f"data: {json.dumps(data)}\n\n"
+
+
+async def _stream_chat(conversation_id: str, user_text: str) -> AsyncGenerator[str, None]:
+    history = list_messages(conversation_id)
+    add_message(conversation_id, "user", {"text": user_text})
+
+    yield _format_sse({"type": "status", "stage": "intent", "message": "Analyzing question"})
+    intent = await analyze_intent(history, user_text)
+
+    yield _format_sse({"type": "status", "stage": "research", "message": "Searching knowledge base"})
+    config = load_system_config()
+    qdrant = QdrantClient(url=config["qdrant"]["host"])
+    collection = config["qdrant"]["collection"]
+    hits = []
+    for query in intent.search_queries:
+        vector = await embed_text(query)
+        search_result = qdrant.search(collection, query_vector=vector, limit=5)
+        for hit in search_result:
+            payload = hit.payload or {}
+            hits.append(
+                {
+                    "doc_id": payload.get("doc_id", ""),
+                    "chunk_id": payload.get("chunk_id", ""),
+                    "url": payload.get("url", ""),
+                    "title": payload.get("title", ""),
+                    "score": hit.score,
+                    "text": payload.get("text", ""),
+                }
+            )
+    research_output = await summarize_research({"hits": hits, "total_results": len(hits)})
+
+    yield _format_sse({"type": "status", "stage": "synthesis", "message": "Drafting answer"})
+    synthesis = await synthesize_answer(intent.model_dump(), research_output.model_dump())
+
+    yield _format_sse({"type": "status", "stage": "validation", "message": "Verifying response"})
+    validation = await validate_answer(user_text, synthesis.draft_answer, research_output.model_dump())
+
+    if validation.needs_clarification and validation.clarifying_question:
+        yield _format_sse({"type": "token", "text": validation.clarifying_question})
+        yield _format_sse({"type": "done"})
+        assistant_content = {
+            "text": validation.clarifying_question,
+            "pipeline": {
+                "intent": intent.model_dump(),
+                "research": research_output.model_dump(),
+                "synthesis": synthesis.model_dump(),
+                "validation": validation.model_dump(),
+            },
+            "metadata": {"processing_time_ms": 0, "model": config["ollama"]["model"]},
+        }
+        add_message(conversation_id, "assistant", assistant_content)
+        return
+
+    final_answer = validation.final_answer or synthesis.draft_answer
+    for token in final_answer.split(" "):
+        yield _format_sse({"type": "token", "text": token + " "})
+        await asyncio.sleep(0)
+    yield _format_sse({"type": "done"})
+
+    assistant_content = {
+        "text": final_answer,
+        "pipeline": {
+            "intent": intent.model_dump(),
+            "research": research_output.model_dump(),
+            "synthesis": synthesis.model_dump(),
+            "validation": validation.model_dump(),
+        },
+        "metadata": {"processing_time_ms": 0, "model": config["ollama"]["model"]},
+    }
+    add_message(conversation_id, "assistant", assistant_content)
+
+
+@router.post("/{conversation_id}/message")
+async def send_message(conversation_id: str, payload: Dict[str, str]) -> StreamingResponse:
+    if "text" not in payload:
+        raise HTTPException(status_code=400, detail="Missing text")
+    if not get_conversation(conversation_id):
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    generator = _stream_chat(conversation_id, payload["text"])
+    return StreamingResponse(generator, media_type="text/event-stream")
+
+===== services/api/app/routes/__init__.py =====
+
+===== services/api/app/agents/intent.py =====
+from app.models.schemas import IntentOutput
+from app.utils.config import load_agents_config
+from app.utils.ollama import call_ollama_json
+
+
+async def analyze_intent(conversation_history: list, user_question: str) -> IntentOutput:
+    config = load_agents_config()
+    system_prompt = config["agents"]["intent"]["system_prompt"]
+    prompt = (
+        f"{system_prompt}\n\nConversation history: {conversation_history}\n"
+        f"User question: {user_question}\n\nRespond with JSON only."
+    )
+    return await call_ollama_json(prompt, IntentOutput)
+
+===== services/api/app/agents/validation.py =====
+from app.models.schemas import ValidationOutput
+from app.utils.config import load_agents_config
+from app.utils.ollama import call_ollama_json
+
+
+async def validate_answer(question: str, draft_answer: str, research: dict) -> ValidationOutput:
+    config = load_agents_config()
+    system_prompt = config["agents"]["validation"]["system_prompt"]
+    prompt = (
+        f"{system_prompt}\n\nUser question: {question}\nDraft answer: {draft_answer}\n"
+        f"Research context: {research}\n\nRespond with JSON only."
+    )
+    return await call_ollama_json(prompt, ValidationOutput)
+
+===== services/api/app/agents/research.py =====
+from app.models.schemas import ResearchOutput
+from app.utils.config import load_agents_config
+from app.utils.ollama import call_ollama_json
+
+
+async def summarize_research(search_results: dict) -> ResearchOutput:
+    config = load_agents_config()
+    system_prompt = config["agents"]["research"]["system_prompt"]
+    prompt = (
+        f"{system_prompt}\n\nSearch results: {search_results}\n\nRespond with JSON only."
+    )
+    return await call_ollama_json(prompt, ResearchOutput)
+
+===== services/api/app/agents/synthesis.py =====
+from app.models.schemas import SynthesisOutput
+from app.utils.config import load_agents_config
+from app.utils.ollama import call_ollama_json
+
+
+async def synthesize_answer(intent: dict, research: dict) -> SynthesisOutput:
+    config = load_agents_config()
+    system_prompt = config["agents"]["synthesis"]["system_prompt"]
+    prompt = (
+        f"{system_prompt}\n\nIntent: {intent}\nResearch: {research}\n\nRespond with JSON only."
+    )
+    return await call_ollama_json(prompt, SynthesisOutput)
+
+===== services/api/requirements.txt =====
+fastapi==0.110.0
+uvicorn[standard]==0.27.1
+httpx==0.27.0
+pydantic==2.6.1
+PyYAML==6.0.1
+qdrant-client==1.7.3
+
+===== services/api/Dockerfile =====
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+COPY app /app/app
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+===== config/ingest.yml =====
+chunking:
+  method: fixed
+  chunk_size: 512
+  chunk_overlap: 128
+
+embedding:
+  model: nomic-embed-text
+  batch_size: 10
+
+===== config/allow_block.yml =====
+seed_urls: []
+
+allowed_domains: []
+
+blocked_domains: []
+
+blocked_paths:
+  - /login
+  - /logout
+  - /signup
+
+===== config/crawler.yml =====
+user_agent: "RagAI-Crawler/1.0"
+request_delay: 1.0
+max_depth: 3
+timeout: 30
+
+url_canonicalization:
+  preserve_query_params: []
+  blocked_params:
+    - utm_source
+    - utm_medium
+    - utm_campaign
+    - fbclid
+    - gclid
+
+===== config/agents.yml =====
+agents:
+  intent:
+    system_prompt: |
+      You are an intent analysis agent. Your job is to understand what the user is asking for.
+
+      Analyze the user's question and return a JSON object with:
+      - intent_label: The type of question (e.g., "policy_question", "data_lookup", "comparison")
+      - search_queries: 1-3 search queries to find relevant information
+      - success_criteria: What would make a good answer
+
+      Be precise and actionable.
+
+  research:
+    system_prompt: |
+      You are a research agent. You have been given search results from a vector database.
+      Your job is to select the most relevant results and present them clearly.
+
+      Return a JSON object with:
+      - hits: List of relevant results (doc_id, url, text, score)
+      - total_results: Total number of results found
+
+  synthesis:
+    system_prompt: |
+      You are a synthesis agent. Your job is to draft a comprehensive answer to the user's question
+      using the research results provided.
+
+      Return a JSON object with:
+      - draft_answer: A complete answer with citations
+      - citations_used: List of URLs referenced
+
+      Be clear, accurate, and cite sources.
+
+  validation:
+    system_prompt: |
+      You are a validation agent. Your job is to ensure the draft answer correctly addresses
+      the user's original question.
+
+      Return a JSON object with:
+      - status: "ok" if answer is good, "needs_clarification" if more info needed
+      - final_answer: The validated answer (if status is "ok")
+      - needs_clarification: boolean
+      - clarifying_question: A specific question to ask the user (if needed)
+
+      Only ask clarifying questions if absolutely necessary.
+
+===== config/system.yml =====
+ollama:
+  host: http://ollama:11434
+  model: qwen2.5:latest
+  embedding_model: nomic-embed-text
+
+qdrant:
+  host: http://qdrant:6333
+  collection: ragai_chunks
+
+api:
+  host: 0.0.0.0
+  port: 8000
+
+===== README.md =====
+# RagAI
+
+Local-first agentic RAG system powered by Ollama, Qdrant, and FastAPI.
+
+## Quick Start
+
+```bash
+./tools/ragaictl start
+```
+
+Access:
+- API: http://localhost:8000
+- Frontend: http://localhost:5000
+
+Before your first crawl, update `config/allow_block.yml` with your `seed_urls` and `allowed_domains`.
+
+## Services
+
+- **API**: FastAPI orchestrator (chat, admin, config)
+- **Crawler**: HTML discovery + capture
+- **Ingestor**: Embedding + Qdrant upsert
+- **Frontend**: Static HTML/CSS/JS UI
+
+## Configuration
+
+Configs live in `config/`:
+- `system.yml`
+- `allow_block.yml`
+- `crawler.yml`
+- `ingest.yml`
+- `agents.yml`
+
+Admin tokens must be placed in `secrets/admin_tokens` (one token per line).
+
+## Utilities
+
+```bash
+./tools/ragaictl status
+./tools/ragaictl logs api
+./tools/ragaictl build
+./tools/ragaictl dump_project --scope all-code --max-lines 2000
+```
+
+===== docker-compose.yml =====
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ragai-ollama
+    volumes:
+      - ./ollama_models:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: ragai-qdrant
+    volumes:
+      - ./qdrant_storage:/qdrant/storage
+    ports:
+      - "6333:6333"
+    restart: unless-stopped
+
+  api:
+    build: ./services/api
+    container_name: ragai-api
+    volumes:
+      - ./config:/app/config:ro
+      - ./secrets:/app/secrets:ro
+      - ./data:/app/data
+    ports:
+      - "8000:8000"
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - QDRANT_HOST=http://qdrant:6333
+    depends_on:
+      - ollama
+      - qdrant
+    restart: unless-stopped
+
+  crawler:
+    build: ./services/crawler
+    container_name: ragai-crawler
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
+    environment:
+      - API_HOST=http://api:8000
+    restart: "no"
+
+  ingestor:
+    build: ./services/ingestor
+    container_name: ragai-ingestor
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - QDRANT_HOST=http://qdrant:6333
+    restart: "no"
+
+  frontend:
+    build: ./services/frontend
+    container_name: ragai-frontend
+    ports:
+      - "5000:80"
+    environment:
+      - API_URL=http://localhost:8000
+    restart: unless-stopped
+
+networks:
+  default:
+    name: ragai-network
+
