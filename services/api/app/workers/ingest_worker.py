@@ -1,20 +1,94 @@
 import json
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Set
+
 import yaml
 from qdrant_client import QdrantClient
+from qdrant_client.http import models as rest
 
-from app.utils.db import connect
 from app.utils.ollama_embed import embed_text
-from app.utils.qdrant import delete_by_doc_id, ensure_collection, upsert_vectors
 
 ARTIFACT_DIR = Path("/app/data/artifacts")
 CONFIG_PATH = Path("/app/config/system.yml")
+DB_PATH = Path("/app/data/ingest/metadata.db")
 
 
 def _load_config(path: Path) -> Dict:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def _connect() -> sqlite3.Connection:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _init_db(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS documents (
+            doc_id TEXT PRIMARY KEY,
+            url TEXT,
+            content_hash TEXT,
+            ingested_at TEXT,
+            chunk_count INTEGER
+        );
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chunks (
+            chunk_id TEXT PRIMARY KEY,
+            doc_id TEXT,
+            chunk_index INTEGER,
+            vector_id TEXT,
+            FOREIGN KEY (doc_id) REFERENCES documents(doc_id)
+        );
+        """
+    )
+
+
+def _ensure_collection(client: QdrantClient, collection: str, vector_size: int) -> None:
+    collections = client.get_collections().collections
+    if any(col.name == collection for col in collections):
+        info = client.get_collection(collection)
+        existing_size = info.config.params.vectors.size
+        if existing_size != vector_size:
+            raise ValueError(
+                f"Qdrant collection '{collection}' has vector size {existing_size}, "
+                f"expected {vector_size}. Clear vectors or use a matching embedding model."
+            )
+        return
+    client.create_collection(
+        collection_name=collection,
+        vectors_config=rest.VectorParams(size=vector_size, distance=rest.Distance.COSINE),
+    )
+    client.create_payload_index(collection_name=collection, field_name="doc_id", field_schema="keyword")
+
+
+def _delete_by_doc_id(client: QdrantClient, collection: str, doc_id: str) -> None:
+    client.delete(
+        collection_name=collection,
+        points_selector=rest.Filter(
+            must=[rest.FieldCondition(key="doc_id", match=rest.MatchValue(value=doc_id))]
+        ),
+    )
+
+
+def _upsert_vectors(
+    client: QdrantClient,
+    collection: str,
+    ids: List[str],
+    vectors: List[List[float]],
+    payloads: List[dict],
+) -> None:
+    client.upsert(
+        collection_name=collection,
+        points=rest.Batch(ids=ids, vectors=vectors, payloads=payloads),
+    )
 
 
 def _load_embeddings(texts: List[str], host: str, model: str) -> List[List[float]]:
@@ -25,18 +99,18 @@ def _doc_ids_on_disk() -> Set[str]:
     return {path.parent.name for path in ARTIFACT_DIR.glob("*/artifact.json")}
 
 
-def ingest() -> None:
+def run_ingest_job(log) -> None:
     system_config = _load_config(CONFIG_PATH)
     qdrant_host = system_config["qdrant"]["host"]
     collection = system_config["qdrant"]["collection"]
     embedding_model = system_config["ollama"]["embedding_model"]
     ollama_host = system_config["ollama"]["host"]
-
     client = QdrantClient(url=qdrant_host)
     vector_size = len(embed_text(ollama_host, embedding_model, "dimension probe"))
-    ensure_collection(client, collection, vector_size=vector_size)
-
-    with connect() as conn:
+    _ensure_collection(client, collection, vector_size=vector_size)
+    log("Starting ingest job")
+    with _connect() as conn:
+        _init_db(conn)
         disk_doc_ids = _doc_ids_on_disk()
         stored_doc_ids = {
             row["doc_id"]
@@ -44,11 +118,13 @@ def ingest() -> None:
         }
         missing_doc_ids = stored_doc_ids - disk_doc_ids
         for doc_id in missing_doc_ids:
-            delete_by_doc_id(client, collection, doc_id)
+            _delete_by_doc_id(client, collection, doc_id)
             conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
             conn.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
-            print(f"Deleted vectors for missing doc_id {doc_id}")
-        for artifact_path in ARTIFACT_DIR.glob("*/artifact.json"):
+            log(f"Deleted vectors for missing doc_id {doc_id}")
+        artifact_files = list(ARTIFACT_DIR.glob("*/artifact.json"))
+        log(f"Found {len(artifact_files)} artifact(s)")
+        for artifact_path in artifact_files:
             artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
             doc_id = artifact["doc_id"]
             content_hash = artifact["content_hash"]
@@ -58,15 +134,14 @@ def ingest() -> None:
             if row and row["content_hash"] == content_hash:
                 continue
             if row:
-                delete_by_doc_id(client, collection, doc_id)
+                _delete_by_doc_id(client, collection, doc_id)
                 conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
                 conn.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
-
+                log(f"Refreshing vectors for {doc_id}")
             chunks_path = artifact_path.parent / "chunks.jsonl"
             chunks = []
             for line in chunks_path.read_text(encoding="utf-8").splitlines():
                 chunks.append(json.loads(line))
-
             texts = [chunk["text"] for chunk in chunks]
             vectors = _load_embeddings(texts, ollama_host, embedding_model)
             ids = [chunk["chunk_id"] for chunk in chunks]
@@ -80,8 +155,7 @@ def ingest() -> None:
                 }
                 for chunk in chunks
             ]
-            upsert_vectors(client, collection, ids, vectors, payloads)
-
+            _upsert_vectors(client, collection, ids, vectors, payloads)
             conn.execute(
                 "INSERT INTO documents (doc_id, url, content_hash, ingested_at, chunk_count) VALUES (?, ?, ?, ?, ?)",
                 (
@@ -105,3 +179,4 @@ def ingest() -> None:
                 ],
             )
         conn.commit()
+    log("Ingest job complete")

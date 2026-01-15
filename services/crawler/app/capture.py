@@ -112,6 +112,6 @@ def capture_url(url: str) -> Tuple[str, List[str]]:
     return canonical, links
 
 
-def capture_and_discover(url: str) -> None:
+def capture_and_discover(url: str, source_depth: int) -> None:
     canonical, links = capture_url(url)
-    append_candidates(links, canonical)
+    append_candidates(links, canonical, source_depth + 1)

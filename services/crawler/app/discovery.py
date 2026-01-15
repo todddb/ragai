@@ -36,8 +36,11 @@ def is_allowed(url: str, config: Dict[str, List[str]]) -> bool:
     return True
 
 
-def append_candidates(urls: Iterable[str], source: str) -> None:
+def append_candidates(urls: Iterable[str], source: str, depth: int) -> None:
     crawler_config = load_crawler_config()
+    max_depth = crawler_config.get("max_depth", 0)
+    if depth > max_depth:
+        return
     url_config = crawler_config.get("url_canonicalization", {})
     seen = set()
     if CANDIDATE_PATH.exists():
@@ -57,6 +60,7 @@ def append_candidates(urls: Iterable[str], source: str) -> None:
                 "url": canonical,
                 "discovered_at": datetime.utcnow().isoformat() + "Z",
                 "source": source,
+                "depth": depth,
             }
             handle.write(json.dumps(record) + "\n")
             seen.add(canonical)

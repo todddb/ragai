@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   ollama:
     image: ollama/ollama:latest
@@ -44,7 +42,7 @@ services:
       - ./data:/app/data
     environment:
       - API_HOST=http://api:8000
-    restart: unless-stopped
+    restart: "no"
 
   ingestor:
     build: ./services/ingestor
@@ -55,7 +53,7 @@ services:
     environment:
       - OLLAMA_HOST=http://ollama:11434
       - QDRANT_HOST=http://qdrant:6333
-    restart: unless-stopped
+    restart: "no"
 
   frontend:
     build: ./services/frontend
