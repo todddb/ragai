@@ -1,0 +1,16 @@
+seed_urls:
+  - https://example.com
+  - https://docs.example.com
+
+allowed_domains:
+  - example.com
+  - docs.example.com
+
+blocked_domains:
+  - login.example.com
+  - auth.example.com
+
+blocked_paths:
+  - /login
+  - /logout
+  - /signup

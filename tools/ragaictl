@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+command=${1:-}
+shift || true
+
+case "$command" in
+  up)
+    docker compose up -d
+    ;;
+  down)
+    docker compose down
+    ;;
+  status)
+    docker compose ps
+    ;;
+  logs)
+    docker compose logs -f "$@"
+    ;;
+  rebuild)
+    if [[ "${1:-}" == "--no-cache" ]]; then
+      docker compose build --no-cache
+    else
+      docker compose build
+    fi
+    ;;
+  restart)
+    docker compose restart "$@"
+    ;;
+  dump_project)
+    ./tools/dump_project.sh "$@"
+    ;;
+  *)
+    echo "Usage: ragaictl {up|down|status|logs|rebuild|restart|dump_project}"
+    exit 1
+    ;;
+esac

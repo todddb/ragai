@@ -1,0 +1,13 @@
+user_agent: "RagAI-Crawler/1.0"
+request_delay: 1.0
+max_depth: 3
+timeout: 30
+
+url_canonicalization:
+  preserve_query_params: []
+  blocked_params:
+    - utm_source
+    - utm_medium
+    - utm_campaign
+    - fbclid
+    - gclid

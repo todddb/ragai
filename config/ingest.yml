@@ -1,0 +1,8 @@
+chunking:
+  method: fixed
+  chunk_size: 512
+  chunk_overlap: 128
+
+embedding:
+  model: nomic-embed-text
+  batch_size: 10
