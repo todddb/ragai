@@ -1,5 +1,0 @@
-Scope: all-code
-Timestamp: 20260115_151303
-Excluded: .git __pycache__ data secrets node_modules venv
-
-===== services/frontend/settings.html =====
