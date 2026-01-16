@@ -1,6 +1,7 @@
 const apiBaseDisplay = document.getElementById('apiBaseDisplay');
 const apiStatus = document.getElementById('apiStatus');
 const ollamaStatus = document.getElementById('ollamaStatus');
+const qdrantStatus = document.getElementById('qdrantStatus');
 const ollamaModel = document.getElementById('ollamaModel');
 const connectionMessage = document.getElementById('connectionMessage');
 const apiUrlInput = document.getElementById('apiUrlInput');
@@ -63,14 +64,24 @@ const checkConnection = async () => {
     setPillStatus(ollamaStatus, false, '❌ Not reachable');
   }
 
+  if (healthPayload && healthPayload.qdrant === 'ok') {
+    setPillStatus(qdrantStatus, true, '✅ Reachable');
+  } else {
+    setPillStatus(qdrantStatus, false, '❌ Not reachable');
+  }
+
   ollamaModel.textContent = healthPayload?.model || '-';
 
-  if (apiOk && healthPayload?.ollama === 'ok') {
-    setConnectionMessage('✅ Connection check passed.', 'success');
+  if (apiOk && healthPayload?.ollama === 'ok' && healthPayload?.qdrant === 'ok') {
+    setConnectionMessage('✅ All services are healthy.', 'success');
   } else if (!apiOk) {
     setConnectionMessage(`❌ Cannot reach API at ${API_BASE}. ${apiError}`, 'error');
-  } else {
+  } else if (healthPayload?.ollama !== 'ok' && healthPayload?.qdrant !== 'ok') {
+    setConnectionMessage('❌ API reachable, but Ollama and Qdrant are not responding.', 'error');
+  } else if (healthPayload?.ollama !== 'ok') {
     setConnectionMessage('❌ API reachable, but Ollama is not responding.', 'error');
+  } else if (healthPayload?.qdrant !== 'ok') {
+    setConnectionMessage('❌ API reachable, but Qdrant is not responding.', 'error');
   }
 };
 

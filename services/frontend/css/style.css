@@ -124,9 +124,7 @@ main {
   display: flex;
   align-items: stretch;
   gap: var(--spacing-lg);
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: var(--spacing-lg);
+  padding: var(--spacing-lg) var(--spacing-lg) var(--spacing-lg) 0;
   flex: 1;
   min-height: 0;
 }
