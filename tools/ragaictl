@@ -33,10 +33,76 @@ Notes:
 EOF
 }
 
+check_health() {
+  local max_attempts=30
+  local attempt=1
+  local api_url="http://localhost:8000/api/health"
+
+  echo "⏳ Waiting for API to become available..."
+
+  while [ $attempt -le $max_attempts ]; do
+    if curl -s -f -m 2 "$api_url" > /dev/null 2>&1; then
+      echo "✅ API is responding"
+      break
+    fi
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+
+  if [ $attempt -gt $max_attempts ]; then
+    echo "❌ API failed to start after ${max_attempts}s"
+    echo ""
+    echo "Recent API logs:"
+    docker compose logs api --tail=50
+    return 1
+  fi
+
+  # Get health status from API
+  local health_json
+  health_json=$(curl -s -f -m 2 "$api_url" 2>/dev/null || echo '{}')
+
+  local api_status=$(echo "$health_json" | grep -o '"api":"[^"]*"' | cut -d'"' -f4)
+  local ollama_status=$(echo "$health_json" | grep -o '"ollama":"[^"]*"' | cut -d'"' -f4)
+  local qdrant_status=$(echo "$health_json" | grep -o '"qdrant":"[^"]*"' | cut -d'"' -f4)
+
+  echo ""
+  echo "=== Health Check Summary ==="
+
+  if [ "$api_status" = "ok" ]; then
+    echo "✅ API OK"
+  else
+    echo "❌ API FAILED"
+  fi
+
+  if [ "$ollama_status" = "ok" ]; then
+    echo "✅ Ollama OK"
+  else
+    echo "❌ Ollama FAILED (status: ${ollama_status:-unknown})"
+  fi
+
+  if [ "$qdrant_status" = "ok" ]; then
+    echo "✅ Qdrant OK"
+  else
+    echo "❌ Qdrant FAILED (status: ${qdrant_status:-unknown})"
+  fi
+
+  echo "==========================="
+  echo ""
+
+  # Return success if at least API is OK
+  if [ "$api_status" = "ok" ]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
 case "$command" in
   start)
     docker compose up -d ollama qdrant api frontend
     docker compose ps
+    echo ""
+    check_health || exit 1
     ;;
   stop)
     docker compose down

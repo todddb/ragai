@@ -48,6 +48,39 @@ function parseMessageContent(rawContent) {
   }
 }
 
+async function getDetailedErrorMessage(error, context = '') {
+  if (error.name === 'TypeError' && error.message.includes('fetch')) {
+    return `Network error: Failed to fetch ${context}. Check if API is running at ${API_BASE}`;
+  }
+  if (error.message.includes('CORS')) {
+    return `CORS error: ${API_BASE} is blocking requests. Check API CORS configuration.`;
+  }
+  return error.message || 'Unknown error occurred';
+}
+
+async function checkApiHealth() {
+  try {
+    const response = await fetch(`${API_BASE}/api/health`, { timeout: 2000 });
+    if (!response.ok) {
+      setStatusMessage(`⚠️ API health check failed (HTTP ${response.status})`, 'error', { temporary: false });
+      return false;
+    }
+    const health = await response.json();
+    if (health.ollama !== 'ok' || health.qdrant !== 'ok') {
+      const issues = [];
+      if (health.ollama !== 'ok') issues.push('Ollama');
+      if (health.qdrant !== 'ok') issues.push('Qdrant');
+      setStatusMessage(`⚠️ Connected but ${issues.join(' and ')} ${issues.length > 1 ? 'are' : 'is'} down`, 'error', { temporary: false });
+      return false;
+    }
+    return true;
+  } catch (error) {
+    const errorMsg = await getDetailedErrorMessage(error, '/api/health');
+    setStatusMessage(`❌ ${errorMsg}`, 'error', { temporary: false });
+    return false;
+  }
+}
+
 function getCitationHits(content) {
   if (!content) {
     return [];
@@ -288,14 +321,16 @@ async function startConversation() {
   try {
     const response = await fetch(`${API_BASE}/api/chat/start`, { method: 'POST' });
     if (!response.ok) {
-      setStatusMessage(`❌ API error ${response.status}: Unable to start conversation.`, 'error');
+      const errorBody = await response.text().catch(() => 'No error details');
+      setStatusMessage(`❌ API error ${response.status}: ${errorBody}`, 'error');
       return false;
     }
     const data = await response.json();
     conversationId = data.conversation_id;
     return true;
   } catch (error) {
-    setStatusMessage(`❌ Cannot reach API at ${API_BASE}`, 'error');
+    const errorMsg = await getDetailedErrorMessage(error, '/api/chat/start');
+    setStatusMessage(`❌ ${errorMsg}`, 'error');
     return false;
   }
 }
@@ -312,7 +347,8 @@ async function loadConversation(conversationIdToLoad, options = {}) {
   try {
     response = await fetch(`${API_BASE}/api/chat/${conversationIdToLoad}`);
   } catch (error) {
-    setStatusMessage(`❌ Cannot reach API at ${API_BASE}`, 'error');
+    const errorMsg = await getDetailedErrorMessage(error, `/api/chat/${conversationIdToLoad}`);
+    setStatusMessage(`❌ ${errorMsg}`, 'error');
     return;
   }
   if (!response.ok) {
@@ -447,7 +483,8 @@ async function sendMessage() {
       setStatusMessage('❌ Response stream interrupted before completion.', 'error');
     }
   } catch (error) {
-    setStatusMessage(`❌ Cannot reach API at ${API_BASE}`, 'error');
+    const errorMsg = await getDetailedErrorMessage(error, '/api/chat/message');
+    setStatusMessage(`❌ ${errorMsg}`, 'error');
   }
 }
 
@@ -483,6 +520,8 @@ messageInput.addEventListener('keydown', (event) => {
     sendMessage();
   }
 });
+
+checkApiHealth();
 
 const params = new URLSearchParams(window.location.search);
 const requestedConversation = params.get('conversation_id');

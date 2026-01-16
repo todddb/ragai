@@ -7,9 +7,17 @@ from typing import Dict, Iterable, List, Set
 from urllib.parse import parse_qsl, urljoin, urlparse, urlunparse
 
 import httpx
-import tiktoken
 import yaml
-from bs4 import BeautifulSoup
+
+try:
+    import tiktoken  # type: ignore
+except Exception:
+    tiktoken = None  # type: ignore
+
+try:
+    from bs4 import BeautifulSoup  # type: ignore
+except Exception:
+    BeautifulSoup = None  # type: ignore
 
 ALLOW_BLOCK_PATH = Path("/app/config/allow_block.yml")
 CRAWLER_CONFIG_PATH = Path("/app/config/crawler.yml")
@@ -17,6 +25,16 @@ INGEST_CONFIG_PATH = Path("/app/config/ingest.yml")
 ARTIFACT_DIR = Path("/app/data/artifacts")
 CANDIDATE_PATH = Path("/app/data/candidates/candidates.jsonl")
 PROCESSED_PATH = Path("/app/data/candidates/processed.json")
+
+
+def _require_tiktoken() -> None:
+    if tiktoken is None:
+        raise RuntimeError("Missing dependency: tiktoken (pip install tiktoken)")
+
+
+def _require_bs4() -> None:
+    if BeautifulSoup is None:
+        raise RuntimeError("Missing dependency: beautifulsoup4 (pip install beautifulsoup4)")
 
 
 def _load_config(path: Path) -> Dict:
@@ -119,6 +137,7 @@ def _append_candidates(urls: Iterable[str], source: str, depth: int, max_depth: 
 
 
 def _chunk_text(text: str, size: int, overlap: int) -> List[str]:
+    _require_tiktoken()
     encoder = tiktoken.get_encoding("cl100k_base")
     tokens = encoder.encode(text)
     chunks = []
@@ -142,6 +161,7 @@ def _content_hash(text: str) -> str:
 
 
 def _capture_url(url: str) -> List[str]:
+    _require_bs4()
     crawler_config = _load_crawler_config()
     ingest_config = _load_config(INGEST_CONFIG_PATH)
     url_config = crawler_config.get("url_canonicalization", {})

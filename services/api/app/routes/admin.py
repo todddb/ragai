@@ -11,7 +11,6 @@ from qdrant_client.http import models as rest
 from app.utils.config import refresh_config
 from app.utils.jobs import delete_job, get_job, list_jobs, start_job
 from app.utils.ollama_embed import embed_text
-from app.workers.crawl_worker import run_crawl_job
 from app.workers.ingest_worker import DB_PATH, run_ingest_job
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -58,6 +57,8 @@ async def update_config(name: str, payload: Dict[str, Any]) -> Dict[str, str]:
 
 @router.post("/crawl")
 async def trigger_crawl() -> Dict[str, str]:
+    from app.workers.crawl_worker import run_crawl_job
+
     job = start_job("crawl", run_crawl_job)
     return {"job_id": job.job_id}
 
