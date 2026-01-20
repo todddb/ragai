@@ -391,9 +391,7 @@ function updateStatus(payload) {
   lastStatus = `${label}: ${payload.message}`;
   if (currentStreamStatus) {
     currentStreamStatus.textContent = lastStatus;
-    return;
   }
-  setStatusMessage(lastStatus);
 }
 
 function setStatusMessage(message, type = '', options = {}) {
@@ -430,7 +428,15 @@ async function sendMessage() {
   input.focus();
   addMessage('user', text);
 
-  setStatusMessage(lastStatus);
+  setStatusMessage('');
+  lastStatus = '';
+  const assistantMessage = addMessage('assistant', '');
+  currentStreamStatus = assistantMessage.statusLine;
+  currentStreamContent = assistantMessage.contentNode;
+  if (currentStreamStatus) {
+    currentStreamStatus.textContent = '';
+  }
+  const renderer = createStreamRenderer(currentStreamContent);
 
   try {
     const response = await fetch(`${API_BASE}/api/chat/${conversationId}/message`, {
@@ -442,23 +448,28 @@ async function sendMessage() {
     if (!response.ok) {
       const detail = await response.text();
       setStatusMessage(`❌ API error ${response.status}: ${detail}`, 'error');
+      if (currentStreamStatus) {
+        currentStreamStatus.textContent = '';
+      }
+      currentStreamStatus = null;
+      currentStreamContent = null;
+      renderer.finish();
       return;
     }
 
     if (!response.body) {
       setStatusMessage('❌ Response stream unavailable from API.', 'error');
+      if (currentStreamStatus) {
+        currentStreamStatus.textContent = '';
+      }
+      currentStreamStatus = null;
+      currentStreamContent = null;
+      renderer.finish();
       return;
     }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
-    const assistantMessage = addMessage('assistant', '');
-    currentStreamStatus = assistantMessage.statusLine;
-    currentStreamContent = assistantMessage.contentNode;
-    if (currentStreamStatus) {
-      currentStreamStatus.textContent = lastStatus;
-    }
-    const renderer = createStreamRenderer(currentStreamContent);
     let buffer = '';
     let doneReceived = false;
 
@@ -496,7 +507,6 @@ async function sendMessage() {
         }
         if (payload.type === 'done') {
           doneReceived = true;
-          setStatusMessage('');
           lastStatus = '';
           if (currentStreamStatus) {
             currentStreamStatus.textContent = '';
@@ -515,6 +525,12 @@ async function sendMessage() {
   } catch (error) {
     const errorMsg = await getDetailedErrorMessage(error, '/api/chat/message');
     setStatusMessage(`❌ ${errorMsg}`, 'error');
+    if (currentStreamStatus) {
+      currentStreamStatus.textContent = '';
+    }
+    currentStreamStatus = null;
+    currentStreamContent = null;
+    renderer.finish();
   }
 }
 
