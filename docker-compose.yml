@@ -50,6 +50,7 @@ services:
     container_name: ragai-crawler
     volumes:
       - ./config:/app/config:ro
+      - ./secrets:/app/secrets:ro
       - ./data:/app/data
     environment:
       - API_HOST=http://api:8000

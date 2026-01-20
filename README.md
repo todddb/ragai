@@ -32,6 +32,50 @@ Configs live in `config/`:
 
 Admin tokens must be placed in `secrets/admin_tokens` (one token per line).
 
+## Playwright-authenticated crawling (policy.byu.edu)
+
+To crawl authenticated pages on `policy.byu.edu`, generate a Playwright storage state file and
+enable Playwright in `config/crawler.yml`.
+
+### 1) Generate a storage state file
+
+Install Playwright locally (or in your virtual environment), then run the helper script:
+
+```bash
+pip install playwright==1.47.2
+python -m playwright install chromium
+python tools/playwright_capture_state.py \
+  --url https://policy.byu.edu \
+  --output secrets/playwright/policy-byu-storageState.json
+```
+
+The script opens a browser window. Log in, then press Enter in the terminal to save the storage
+state. The JSON file is ignored by git.
+
+### 2) Update crawler config
+
+Ensure `config/crawler.yml` includes:
+
+```yaml
+playwright:
+  enabled: true
+  headless: true
+  storage_state_path: /app/secrets/playwright/policy-byu-storageState.json
+  use_for_domains:
+    - policy.byu.edu
+  navigation_timeout_ms: 60000
+```
+
+### 3) Rebuild and run the crawler
+
+Playwright is installed in the crawler image, so rebuild it after changes:
+
+```bash
+docker compose build crawler
+```
+
+Run a crawl and confirm logs include `FETCH=playwright` for `policy.byu.edu` URLs.
+
 ## GPU Acceleration (Ollama + NVIDIA)
 
 To enable GPU-accelerated inference with Ollama (recommended for RTX-class GPUs), ensure the

@@ -1,17 +1,18 @@
 import hashlib
 import json
+import logging
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
-import httpx
 import tiktoken
 import yaml
 from bs4 import BeautifulSoup
 
 from app.discovery import append_candidates
+from app.fetch import fetch_html_httpx, fetch_html_playwright
 from app.utils.url import canonicalize_url, doc_id_for_url
 
 CONFIG_PATH = Path("/app/config/crawler.yml")
@@ -56,10 +57,27 @@ def capture_url(url: str) -> Tuple[str, List[str]]:
     timeout = crawler_config.get("timeout", 30)
 
     time.sleep(delay)
-    response = httpx.get(canonical, headers=headers, timeout=timeout)
-    response.raise_for_status()
+    playwright_config = crawler_config.get("playwright", {})
+    hostname = (urlparse(canonical).hostname or "").lower()
+    use_domains = [domain.lower() for domain in playwright_config.get("use_for_domains", [])]
+    use_playwright = bool(playwright_config.get("enabled")) and hostname in use_domains
+    logger = logging.getLogger(__name__)
+    if use_playwright:
+        storage_state_path = playwright_config.get("storage_state_path")
+        if not storage_state_path:
+            raise ValueError("Playwright storage_state_path is not configured for this crawl.")
+        logger.info("FETCH=playwright url=%s", canonical)
+        html = fetch_html_playwright(
+            canonical,
+            storage_state_path=storage_state_path,
+            headless=playwright_config.get("headless", True),
+            timeout_ms=playwright_config.get("navigation_timeout_ms", 60000),
+        )
+    else:
+        logger.info("FETCH=httpx url=%s", canonical)
+        html = fetch_html_httpx(canonical, headers=headers, timeout=timeout)
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    soup = BeautifulSoup(html, "html.parser")
     title = soup.title.string.strip() if soup.title and soup.title.string else ""
     if not title:
         h1 = soup.find("h1")
