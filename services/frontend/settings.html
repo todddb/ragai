@@ -134,6 +134,21 @@
                 <textarea id="blockedDomains" rows="6"></textarea>
                 <div class="field-help">One per line.</div>
               </div>
+              <div class="field">
+                <label class="field-label" for="playwrightEnabled">Playwright enabled</label>
+                <input type="checkbox" id="playwrightEnabled" />
+                <div class="field-help">Enable Playwright for authenticated crawling.</div>
+              </div>
+              <div class="field">
+                <label class="field-label" for="playwrightStorageStatePath">Storage state path</label>
+                <input type="text" id="playwrightStorageStatePath" />
+                <div class="field-help">Absolute path inside the crawler container.</div>
+              </div>
+              <div class="field">
+                <label class="field-label" for="playwrightUseDomains">Use-for domains</label>
+                <textarea id="playwrightUseDomains" rows="6"></textarea>
+                <div class="field-help">One per line.</div>
+              </div>
             </div>
             <div class="actions-row align-right">
               <span id="saveCrawlStatus" class="status-text"></span>

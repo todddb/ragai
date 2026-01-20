@@ -1,6 +1,7 @@
 let currentCrawlJobId = null;
 let currentIngestJobId = null;
 let currentJobLogId = null;
+let cachedCrawlerConfig = {};
 const logStreams = {
   crawl: null,
   ingest: null,
@@ -93,20 +94,52 @@ async function loadConfigs() {
   document.getElementById('researchPrompt').value = agents.agents.research.system_prompt || '';
   document.getElementById('synthesisPrompt').value = agents.agents.synthesis.system_prompt || '';
   document.getElementById('validationPrompt').value = agents.agents.validation.system_prompt || '';
+
+  const crawler = await fetch(`${API_BASE}/api/admin/config/crawler`).then((r) => r.json());
+  cachedCrawlerConfig = crawler || {};
+  const playwright = cachedCrawlerConfig.playwright || {};
+  document.getElementById('playwrightEnabled').checked = Boolean(playwright.enabled);
+  document.getElementById('playwrightStorageStatePath').value = playwright.storage_state_path || '';
+  document.getElementById('playwrightUseDomains').value = (playwright.use_for_domains || []).join('\n');
 }
 
 async function saveCrawlConfig() {
-  const payload = {
+  const allowPayload = {
     seed_urls: document.getElementById('seedUrls').value.split('\n').filter(Boolean),
     allowed_domains: document.getElementById('allowedDomains').value.split('\n').filter(Boolean),
     blocked_domains: document.getElementById('blockedDomains').value.split('\n').filter(Boolean)
   };
-  const response = await fetch(`${API_BASE}/api/admin/config/allow_block`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  if (response.ok) {
+  const existingPlaywright = cachedCrawlerConfig.playwright || {};
+  const playwrightPayload = {
+    ...existingPlaywright,
+    enabled: document.getElementById('playwrightEnabled').checked,
+    storage_state_path: document.getElementById('playwrightStorageStatePath').value.trim(),
+    use_for_domains: document.getElementById('playwrightUseDomains').value.split('\n').filter(Boolean)
+  };
+  if (playwrightPayload.headless === undefined) {
+    playwrightPayload.headless = true;
+  }
+  if (playwrightPayload.navigation_timeout_ms === undefined) {
+    playwrightPayload.navigation_timeout_ms = 60000;
+  }
+  const crawlerPayload = {
+    ...cachedCrawlerConfig,
+    playwright: playwrightPayload
+  };
+  const [allowResponse, crawlerResponse] = await Promise.all([
+    fetch(`${API_BASE}/api/admin/config/allow_block`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(allowPayload)
+    }),
+    fetch(`${API_BASE}/api/admin/config/crawler`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(crawlerPayload)
+    })
+  ]);
+  if (allowResponse.ok && crawlerResponse.ok) {
+    cachedCrawlerConfig = crawlerPayload;
     setStatus('saveCrawlStatus', 'Saved');
   } else {
     setStatus('saveCrawlStatus', 'Error saving config', 'error');

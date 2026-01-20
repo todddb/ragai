@@ -11,3 +11,11 @@ url_canonicalization:
     - utm_campaign
     - fbclid
     - gclid
+
+playwright:
+  enabled: true
+  headless: true
+  storage_state_path: /app/secrets/playwright/policy-byu-storageState.json
+  use_for_domains:
+    - policy.byu.edu
+  navigation_timeout_ms: 60000
