@@ -8,6 +8,7 @@ const COLLAPSED_SIDEBAR_WIDTH = 56;
 const sidebar = document.getElementById('sidebar');
 const conversationList = document.getElementById('conversationList');
 const sidebarToggle = document.getElementById('sidebarToggle');
+const sidebarCollapsedToggle = document.getElementById('sidebarCollapsedToggle');
 const sidebarNew = document.getElementById('sidebarNew');
 const resizeHandle = document.getElementById('sidebarResizeHandle');
 
@@ -34,6 +35,12 @@ if (sidebar && conversationList) {
       'aria-label',
       collapsed ? 'Expand conversations sidebar' : 'Collapse conversations sidebar'
     );
+    if (sidebarCollapsedToggle) {
+      sidebarCollapsedToggle.setAttribute(
+        'aria-label',
+        collapsed ? 'Expand conversations sidebar' : 'Collapse conversations sidebar'
+      );
+    }
     if (collapsed) {
       setSidebarWidth(COLLAPSED_SIDEBAR_WIDTH);
     } else {
@@ -73,6 +80,8 @@ if (sidebar && conversationList) {
     const item = document.createElement('div');
     item.className = 'conversation-item';
     item.dataset.id = conv.id;
+    item.setAttribute('role', 'button');
+    item.setAttribute('tabindex', '0');
 
     const header = document.createElement('div');
     header.className = 'conversation-item-header';
@@ -92,38 +101,48 @@ if (sidebar && conversationList) {
     const actions = document.createElement('div');
     actions.className = 'conversation-item-actions';
 
-    const openButton = document.createElement('button');
-    openButton.className = 'btn btn-primary';
-    openButton.textContent = 'Open';
-    openButton.addEventListener('click', async () => {
-      if (window.loadConversation) {
-        await window.loadConversation(conv.id);
-        updateActiveConversation();
-      }
-    });
+    const createActionButton = (label, svgPath) => {
+      const button = document.createElement('button');
+      button.className = 'icon-btn';
+      button.type = 'button';
+      button.setAttribute('aria-label', label);
+      button.setAttribute('title', label);
+      button.innerHTML = `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="${svgPath}"></path>
+        </svg>
+      `;
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+      });
+      return button;
+    };
 
-    const renameButton = document.createElement('button');
-    renameButton.className = 'btn';
-    renameButton.textContent = 'Rename';
+    const renameButton = createActionButton(
+      'Edit',
+      'M5 17.25V19h1.75L16.81 8.94l-1.75-1.75L5 17.25zm12.71-7.04a1 1 0 0 0 0-1.41l-2.5-2.5a1 1 0 0 0-1.41 0l-1.13 1.13 3.91 3.91 1.13-1.13z'
+    );
 
-    const deleteButton = document.createElement('button');
-    deleteButton.className = 'btn';
-    deleteButton.textContent = 'Delete';
+    const deleteButton = createActionButton(
+      'Delete',
+      'M6 7h12v2H6V7zm2 3h8l-1 9H9l-1-9zm3-5h2l1 1H10l1-1z'
+    );
+
+    const exportButton = createActionButton(
+      'Export',
+      'M12 3l4 4h-3v7h-2V7H8l4-4zm-7 14h14v2H5v-2z'
+    );
     deleteButton.addEventListener('click', async () => {
       await fetch(`${API_BASE}/api/chat/${conv.id}`, { method: 'DELETE' });
       loadConversations();
     });
 
-    const exportButton = document.createElement('button');
-    exportButton.className = 'btn';
-    exportButton.textContent = 'Export';
     exportButton.addEventListener('click', async () => {
       const response = await fetch(`${API_BASE}/api/chat/${conv.id}/export`);
       if (!response.ok) return;
       await downloadResponse(response, `conversation_${conv.id}.json`);
     });
 
-    actions.appendChild(openButton);
     actions.appendChild(renameButton);
     actions.appendChild(deleteButton);
     actions.appendChild(exportButton);
@@ -172,6 +191,25 @@ if (sidebar && conversationList) {
       renameInput.value = conv.title || '';
     });
 
+    const openConversation = async () => {
+      if (window.loadConversation) {
+        await window.loadConversation(conv.id);
+        updateActiveConversation();
+      }
+    };
+
+    item.addEventListener('click', openConversation);
+    item.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openConversation();
+      }
+    });
+
+    renameRow.addEventListener('click', (event) => {
+      event.stopPropagation();
+    });
+
     item.appendChild(header);
     item.appendChild(renameRow);
 
@@ -191,6 +229,10 @@ if (sidebar && conversationList) {
 
   sidebarToggle?.addEventListener('click', () => {
     applyCollapsedState(!isCollapsed());
+  });
+
+  sidebarCollapsedToggle?.addEventListener('click', () => {
+    applyCollapsedState(false);
   });
 
   sidebarNew?.addEventListener('click', async () => {
@@ -237,4 +279,6 @@ if (sidebar && conversationList) {
 
   applyCollapsedState(isCollapsed());
   loadConversations();
+
+  window.refreshConversationList = loadConversations;
 }

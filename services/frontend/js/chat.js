@@ -3,6 +3,7 @@ let lastStatus = '';
 let statusTimeout = null;
 let currentStreamStatus = null;
 let currentStreamContent = null;
+const autoTitleRequested = new Set();
 
 const STATUS_LABELS = {
   intent: 'Intent',
@@ -382,6 +383,7 @@ async function loadConversation(conversationIdToLoad, options = {}) {
     setConversationIdInUrl(conversationIdToLoad);
   }
   document.dispatchEvent(new CustomEvent('conversation:changed', { detail: { id: conversationId } }));
+  await maybeAutoTitleConversation(data.conversation, data.messages);
 }
 
 function updateStatus(payload) {
@@ -513,6 +515,45 @@ async function sendMessage() {
   } catch (error) {
     const errorMsg = await getDetailedErrorMessage(error, '/api/chat/message');
     setStatusMessage(`❌ ${errorMsg}`, 'error');
+  }
+}
+
+function shouldAutoTitle(conversation, messages) {
+  if (!conversation || !conversation.id) {
+    return false;
+  }
+  if (conversation.title && conversation.title !== 'New Conversation') {
+    return false;
+  }
+  if (conversation.auto_titled) {
+    return false;
+  }
+  if (autoTitleRequested.has(conversation.id)) {
+    return false;
+  }
+  const hasUser = messages.some((message) => message.role === 'user');
+  const hasAssistant = messages.some((message) => message.role === 'assistant');
+  return hasUser && hasAssistant;
+}
+
+async function maybeAutoTitleConversation(conversation, messages) {
+  if (!shouldAutoTitle(conversation, messages)) {
+    return;
+  }
+  autoTitleRequested.add(conversation.id);
+  try {
+    const response = await fetch(`${API_BASE}/api/chat/${conversation.id}/title/auto`, {
+      method: 'POST'
+    });
+    if (!response.ok) {
+      return;
+    }
+    const data = await response.json();
+    if (data.title && window.refreshConversationList) {
+      window.refreshConversationList();
+    }
+  } catch (error) {
+    autoTitleRequested.delete(conversation.id);
   }
 }
 
