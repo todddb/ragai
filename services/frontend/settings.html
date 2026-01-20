@@ -82,9 +82,13 @@
 
               <div class="field">
                 <h3 class="section-heading">Seed URLs</h3>
-                <div id="seedList" class="list"></div>
+                <div id="seedList" class="seed-table"></div>
                 <div class="list-add">
                   <input id="seedAddInput" type="text" placeholder="https://www.example.com/site/" />
+                  <label style="display: flex; align-items: center; gap: 4px;">
+                    <input type="checkbox" id="seedAddAllowHttp" />
+                    <span style="font-size: 0.85rem;">Allow HTTP</span>
+                  </label>
                   <button class="btn" id="seedAddBtn">Add</button>
                 </div>
               </div>
@@ -104,6 +108,7 @@
                     <label><input type="checkbox" id="allowAddDocx" /> docx</label>
                     <label><input type="checkbox" id="allowAddXlsx" /> xlsx</label>
                     <label><input type="checkbox" id="allowAddPptx" /> pptx</label>
+                    <label><input type="checkbox" id="allowAddAllowHttp" /> Allow HTTP</label>
                   </div>
                   <button class="btn" id="allowAddBtn">Add</button>
                 </div>
@@ -122,15 +127,6 @@
                   <input id="blockedAddInput" type="text" placeholder="example.com" />
                   <button class="btn" id="blockedAddBtn">Add</button>
                 </div>
-              </div>
-
-              <div class="field">
-                <label class="field-label" for="forceHttpsCheckbox">Force HTTPS (recommended)</label>
-                <label style="display: flex; align-items: center; gap: 8px;">
-                  <input type="checkbox" id="forceHttpsCheckbox" checked />
-                  <span>Enforce HTTPS for all URLs</span>
-                </label>
-                <div class="field-help">If unchecked, HTTP is allowed.</div>
               </div>
 
               <div class="actions-row align-right">
