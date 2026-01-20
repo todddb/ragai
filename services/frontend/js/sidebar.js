@@ -1,5 +1,5 @@
 const SIDEBAR_WIDTH_KEY = 'ragai.sidebar.width';
-const SIDEBAR_COLLAPSED_KEY = 'ragai.sidebar.collapsed';
+const SIDEBAR_COLLAPSED_KEY = 'SIDEBAR_COLLAPSED';
 const DEFAULT_SIDEBAR_WIDTH = 320;
 const MIN_SIDEBAR_WIDTH = 240;
 const MAX_SIDEBAR_WIDTH = 520;
@@ -13,6 +13,11 @@ const sidebarNew = document.getElementById('sidebarNew');
 const resizeHandle = document.getElementById('sidebarResizeHandle');
 
 if (sidebar && conversationList) {
+  const legacyCollapsed = localStorage.getItem('ragai.sidebar.collapsed');
+  if (legacyCollapsed !== null && localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === null) {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, legacyCollapsed);
+  }
+
   const getStoredWidth = () => {
     const stored = Number.parseInt(localStorage.getItem(SIDEBAR_WIDTH_KEY), 10);
     if (Number.isNaN(stored)) {
@@ -29,6 +34,7 @@ if (sidebar && conversationList) {
 
   const applyCollapsedState = (collapsed) => {
     sidebar.classList.toggle('collapsed', collapsed);
+    document.documentElement.classList.toggle('sidebar-collapsed', collapsed);
     localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsed));
     sidebarToggle.textContent = collapsed ? '❯' : '❮';
     sidebarToggle.setAttribute(
