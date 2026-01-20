@@ -10,6 +10,43 @@ const testConnectionButton = document.getElementById('testConnection');
 const toggleUser = document.getElementById('toggleUser');
 const toggleAdmin = document.getElementById('toggleAdmin');
 const adminPanel = document.getElementById('adminPanel');
+const modeToggle = document.querySelector('.segmented-control');
+const adminLockStatus = document.getElementById('adminLockStatus');
+const lockAdminButton = document.getElementById('lockAdminButton');
+const lockAdminInline = document.getElementById('lockAdminInline');
+const unlockSection = document.getElementById('unlockSection');
+const adminSection = document.getElementById('adminSection');
+
+const ADMIN_UNLOCK_KEY = 'ADMIN_UNLOCKED';
+
+const isAdminUnlocked = () => localStorage.getItem(ADMIN_UNLOCK_KEY) === 'true';
+
+const updateAdminLockUi = (unlocked) => {
+  if (adminLockStatus) {
+    adminLockStatus.textContent = unlocked ? 'Admin unlocked' : 'Admin locked';
+  }
+  if (lockAdminButton) {
+    lockAdminButton.disabled = !unlocked;
+  }
+  if (lockAdminInline) {
+    lockAdminInline.disabled = !unlocked;
+  }
+  if (unlockSection) {
+    unlockSection.style.display = unlocked ? 'none' : 'grid';
+  }
+  if (adminSection) {
+    adminSection.style.display = unlocked ? 'block' : 'none';
+  }
+};
+
+const setAdminUnlocked = (unlocked) => {
+  if (unlocked) {
+    localStorage.setItem(ADMIN_UNLOCK_KEY, 'true');
+  } else {
+    localStorage.removeItem(ADMIN_UNLOCK_KEY);
+  }
+  updateAdminLockUi(unlocked);
+};
 
 const setPillStatus = (element, ok, label) => {
   element.textContent = label;
@@ -92,10 +129,41 @@ const setMode = (mode) => {
   toggleAdmin.classList.toggle('active', isAdmin);
   toggleAdmin.setAttribute('aria-selected', String(isAdmin));
   adminPanel.style.display = isAdmin ? 'block' : 'none';
+  modeToggle?.classList.toggle('is-admin', isAdmin);
+  if (isAdmin) {
+    const unlocked = isAdminUnlocked();
+    updateAdminLockUi(unlocked);
+    if (unlocked && window.loadAdminData) {
+      window.loadAdminData();
+    }
+  }
 };
 
 toggleUser.addEventListener('click', () => setMode('user'));
 toggleAdmin.addEventListener('click', () => setMode('admin'));
+lockAdminButton?.addEventListener('click', () => {
+  setAdminUnlocked(false);
+  if (window.resetAdminSession) {
+    window.resetAdminSession();
+  }
+});
+lockAdminInline?.addEventListener('click', () => {
+  setAdminUnlocked(false);
+  if (window.resetAdminSession) {
+    window.resetAdminSession();
+  }
+});
+
+window.onAdminUnlocked = () => {
+  setAdminUnlocked(true);
+  if (window.loadAdminData) {
+    window.loadAdminData();
+  }
+};
+
+window.setAdminUnlocked = (value) => {
+  setAdminUnlocked(Boolean(value));
+};
 
 apiBaseDisplay.textContent = API_BASE;
 apiUrlInput.value = localStorage.getItem('API_URL') || API_BASE;
@@ -113,4 +181,5 @@ saveApiUrlButton.addEventListener('click', () => {
 testConnectionButton.addEventListener('click', checkConnection);
 
 setMode('user');
+updateAdminLockUi(isAdminUnlocked());
 checkConnection();

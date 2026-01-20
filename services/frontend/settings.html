@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Settings</title>
-  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/style.css?v=2" />
 </head>
 <body class="page-settings">
   <header>
@@ -16,8 +16,16 @@
       <p>Connectivity, access, and environment controls.</p>
     </div>
     <div class="header-actions">
-      <button class="btn nav-button" onclick="location.href='chat.html'">Chat</button>
-      <button class="btn nav-button active" onclick="location.href='settings.html'">Settings</button>
+      <button class="icon-btn nav-icon" onclick="location.href='chat.html'" aria-label="Chat">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6.5 4h11a3.5 3.5 0 0 1 3.5 3.5v5A3.5 3.5 0 0 1 17.5 16H13l-4.4 3.8a1 1 0 0 1-1.6-.8V16H6.5A3.5 3.5 0 0 1 3 12.5v-5A3.5 3.5 0 0 1 6.5 4zm0 2A1.5 1.5 0 0 0 5 7.5v5A1.5 1.5 0 0 0 6.5 14H8a1 1 0 0 1 1 1v1.4l3-2.6a1 1 0 0 1 .6-.2h4.9a1.5 1.5 0 0 0 1.5-1.5v-5A1.5 1.5 0 0 0 17.5 6h-11z" />
+        </svg>
+      </button>
+      <button class="icon-btn nav-icon active" onclick="location.href='settings.html'" aria-label="Settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 8.6a3.4 3.4 0 1 1 0 6.8 3.4 3.4 0 0 1 0-6.8zm8.2 2.8a7.7 7.7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1a7.8 7.8 0 0 0-1.7-1l-.3-2.6h-4l-.3 2.6a7.8 7.8 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.5a7.7 7.7 0 0 0 0 2.1l-2 1.5 2 3.4 2.4-1a7.8 7.8 0 0 0 1.7 1l.3 2.6h4l.3-2.6a7.8 7.8 0 0 0 1.7-1l2.4 1 2-3.4-2-1.5c.1-.3.1-.7.1-1.1z" />
+        </svg>
+      </button>
     </div>
   </header>
 
@@ -71,7 +79,8 @@
 
     <section class="settings-section">
       <h2>Access</h2>
-      <div class="segmented-control" role="tablist" aria-label="Settings mode">
+      <div class="segmented-control mode-toggle" role="tablist" aria-label="Settings mode">
+        <span class="segmented-indicator" aria-hidden="true"></span>
         <button class="segmented-button active" id="toggleUser" type="button" role="tab" aria-selected="true">
           User
         </button>
@@ -79,81 +88,141 @@
           Admin
         </button>
       </div>
+      <div class="admin-lock-row">
+        <div class="admin-lock-text" id="adminLockStatus">Admin locked</div>
+        <button class="btn btn-small" id="lockAdminButton" type="button">Lock Admin</button>
+      </div>
 
       <div id="adminPanel" class="admin-panel" style="display: none;">
-        <section id="unlockSection">
-          <input type="password" id="adminToken" placeholder="ADMIN_TOKEN" />
-          <button class="btn btn-primary" id="unlockButton">Unlock</button>
-          <div id="unlockError" class="status-text"></div>
+        <section id="unlockSection" class="admin-unlock">
+          <div class="field">
+            <label class="field-label" for="adminToken">Admin token</label>
+            <input type="password" id="adminToken" placeholder="Enter admin token" autocomplete="current-password" />
+            <div class="field-help">Enter the token provided by your administrator.</div>
+          </div>
+          <div class="actions-row">
+            <button class="btn btn-primary" id="unlockButton">Unlock</button>
+            <div id="unlockError" class="status-text"></div>
+          </div>
         </section>
 
         <section id="adminSection" style="display:none;">
-          <div class="tabs">
-            <button class="tab-button active" data-tab="crawl">Crawl</button>
-            <button class="tab-button" data-tab="ingest">Ingest</button>
-            <button class="tab-button" data-tab="agents">Agents</button>
-            <button class="tab-button" data-tab="logs">Logs</button>
+          <div class="admin-header">
+            <div class="tabs">
+              <button class="tab-button active" data-tab="crawl">Crawl</button>
+              <button class="tab-button" data-tab="ingest">Ingest</button>
+              <button class="tab-button" data-tab="agents">Agents</button>
+              <button class="tab-button" data-tab="logs">Logs</button>
+            </div>
+            <button class="btn" id="lockAdminInline" type="button">Lock Admin</button>
           </div>
 
           <div id="crawl" class="tab-content">
-            <label>Seed URLs (one per line):</label>
-            <textarea id="seedUrls" rows="4"></textarea>
-            <label>Allowed Domains (one per line):</label>
-            <textarea id="allowedDomains" rows="4"></textarea>
-            <label>Blocked Domains (one per line):</label>
-            <textarea id="blockedDomains" rows="4"></textarea>
-            <div>
+            <div class="form-grid">
+              <div class="field">
+                <label class="field-label" for="seedUrls">Seed URLs</label>
+                <textarea id="seedUrls" rows="6"></textarea>
+                <div class="field-help">One per line.</div>
+              </div>
+              <div class="field">
+                <label class="field-label" for="allowedDomains">Allowed Domains</label>
+                <textarea id="allowedDomains" rows="6"></textarea>
+                <div class="field-help">One per line.</div>
+              </div>
+              <div class="field">
+                <label class="field-label" for="blockedDomains">Blocked Domains</label>
+                <textarea id="blockedDomains" rows="6"></textarea>
+                <div class="field-help">One per line.</div>
+              </div>
+            </div>
+            <div class="actions-row align-right">
+              <span id="saveCrawlStatus" class="status-text"></span>
               <button class="btn btn-primary" id="saveCrawlConfig">Save Config</button>
               <button class="btn" id="triggerCrawl">Trigger Crawl</button>
-              <span id="saveCrawlStatus" class="status-text"></span>
             </div>
-            <h3>Live Log</h3>
-            <div class="log-area" id="crawlLog"></div>
-            <div class="inline-actions">
-              <button class="btn" id="exportCrawlLog">Export Log</button>
-              <button class="btn" id="deleteCrawlLog">Delete Log</button>
-              <span id="crawlLogStatus" class="status-text"></span>
+            <div class="log-section">
+              <div class="log-header">
+                <h3>Live Log</h3>
+              </div>
+              <div class="log-area" id="crawlLog"></div>
+              <div class="actions-row align-right">
+                <span id="crawlLogStatus" class="status-text"></span>
+                <button class="btn" id="exportCrawlLog">Export Log</button>
+                <button class="btn" id="deleteCrawlLog">Delete Log</button>
+              </div>
             </div>
           </div>
 
           <div id="ingest" class="tab-content" style="display:none;">
-            <p>Artifact Directory: data/artifacts/</p>
-            <p id="lastIngest">Last Ingest: -</p>
-            <button class="btn btn-primary" id="triggerIngest">Trigger Ingest</button>
-            <button class="btn" id="clearVectors">Clear Vector DB</button>
-            <span id="clearVectorsStatus" class="status-text"></span>
-            <h3>Live Log</h3>
-            <div class="log-area" id="ingestLog"></div>
-            <div class="inline-actions">
-              <button class="btn" id="exportIngestLog">Export Log</button>
-              <button class="btn" id="deleteIngestLog">Delete Log</button>
-              <span id="ingestLogStatus" class="status-text"></span>
+            <div class="panel-card">
+              <div class="info-grid">
+                <div>
+                  <div class="field-label">Artifact Directory</div>
+                  <div class="info-value">data/artifacts/</div>
+                </div>
+                <div>
+                  <div class="field-label">Last Ingest</div>
+                  <div class="info-value" id="lastIngest">-</div>
+                </div>
+              </div>
+              <div class="actions-row">
+                <button class="btn btn-primary" id="triggerIngest">Trigger Ingest</button>
+                <button class="btn" id="clearVectors">Clear Vector DB</button>
+                <span id="clearVectorsStatus" class="status-text"></span>
+              </div>
+            </div>
+            <div class="log-section">
+              <div class="log-header">
+                <h3>Live Log</h3>
+              </div>
+              <div class="log-area" id="ingestLog"></div>
+              <div class="actions-row align-right">
+                <span id="ingestLogStatus" class="status-text"></span>
+                <button class="btn" id="exportIngestLog">Export Log</button>
+                <button class="btn" id="deleteIngestLog">Delete Log</button>
+              </div>
             </div>
           </div>
 
           <div id="agents" class="tab-content" style="display:none;">
-            <label>Intent Agent System Prompt:</label>
-            <textarea id="intentPrompt" rows="6"></textarea>
-            <label>Research Agent System Prompt:</label>
-            <textarea id="researchPrompt" rows="6"></textarea>
-            <label>Synthesis Agent System Prompt:</label>
-            <textarea id="synthesisPrompt" rows="6"></textarea>
-            <label>Validation Agent System Prompt:</label>
-            <textarea id="validationPrompt" rows="6"></textarea>
-            <div>
-              <button class="btn btn-primary" id="savePrompts">Save Prompts</button>
+            <div class="card-grid">
+              <div class="panel-card">
+                <label class="field-label" for="intentPrompt">Intent Agent System Prompt</label>
+                <textarea id="intentPrompt" rows="6"></textarea>
+              </div>
+              <div class="panel-card">
+                <label class="field-label" for="researchPrompt">Research Agent System Prompt</label>
+                <textarea id="researchPrompt" rows="6"></textarea>
+              </div>
+              <div class="panel-card">
+                <label class="field-label" for="synthesisPrompt">Synthesis Agent System Prompt</label>
+                <textarea id="synthesisPrompt" rows="6"></textarea>
+              </div>
+              <div class="panel-card">
+                <label class="field-label" for="validationPrompt">Validation Agent System Prompt</label>
+                <textarea id="validationPrompt" rows="6"></textarea>
+              </div>
+            </div>
+            <div class="actions-row align-right">
               <span id="savePromptsStatus" class="status-text"></span>
+              <button class="btn btn-primary" id="savePrompts">Save Prompts</button>
             </div>
           </div>
 
           <div id="logs" class="tab-content" style="display:none;">
-            <table id="jobTable" class="table"></table>
-            <h3>Job Log</h3>
-            <div class="log-area" id="jobLog"></div>
-            <div class="inline-actions">
-              <button class="btn" id="exportJobLog">Export Log</button>
-              <button class="btn" id="deleteJobLog">Delete Log</button>
-              <span id="jobLogStatus" class="status-text"></span>
+            <div class="panel-card">
+              <table id="jobTable" class="table"></table>
+            </div>
+            <div class="log-section">
+              <div class="log-header">
+                <h3>Job Log</h3>
+              </div>
+              <div class="log-area" id="jobLog"></div>
+              <div class="actions-row align-right">
+                <span id="jobLogStatus" class="status-text"></span>
+                <button class="btn" id="exportJobLog">Export Log</button>
+                <button class="btn" id="deleteJobLog">Delete Log</button>
+              </div>
             </div>
           </div>
         </section>
@@ -166,8 +235,8 @@
   <script>
     window.API_URL = window.API_URL || localStorage.getItem('API_URL');
   </script>
-  <script src="js/config.js"></script>
-  <script src="js/admin.js"></script>
-  <script src="js/settings.js"></script>
+  <script src="js/config.js?v=2"></script>
+  <script src="js/admin.js?v=2"></script>
+  <script src="js/settings.js?v=2"></script>
 </body>
 </html>

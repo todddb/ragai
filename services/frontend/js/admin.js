@@ -1,4 +1,3 @@
-let authToken = null;
 let currentCrawlJobId = null;
 let currentIngestJobId = null;
 let currentJobLogId = null;
@@ -59,6 +58,10 @@ async function unlock() {
   const token = document.getElementById('adminToken').value.trim();
   const error = document.getElementById('unlockError');
   error.textContent = '';
+  if (!token) {
+    error.textContent = 'Please enter a token to continue.';
+    return;
+  }
   const response = await fetch(`${API_BASE}/api/admin/unlock`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -68,11 +71,15 @@ async function unlock() {
     error.textContent = 'Invalid token.';
     return;
   }
-  authToken = token;
-  document.getElementById('unlockSection').style.display = 'none';
-  document.getElementById('adminSection').style.display = 'block';
-  loadConfigs();
-  loadJobs();
+  document.getElementById('adminToken').value = '';
+  if (window.onAdminUnlocked) {
+    window.onAdminUnlocked();
+  } else {
+    document.getElementById('unlockSection').style.display = 'none';
+    document.getElementById('adminSection').style.display = 'block';
+    loadConfigs();
+    loadJobs();
+  }
 }
 
 async function loadConfigs() {
@@ -234,6 +241,12 @@ async function clearVectors() {
 }
 
 document.getElementById('unlockButton').addEventListener('click', unlock);
+document.getElementById('adminToken').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    unlock();
+  }
+});
 
 document.querySelectorAll('.tab-button').forEach((btn) => {
   btn.addEventListener('click', () => showTab(btn.dataset.tab));
@@ -303,3 +316,29 @@ document.getElementById('jobTable').addEventListener('click', async (event) => {
     }
   }
 });
+
+window.loadAdminData = () => {
+  loadConfigs();
+  loadJobs();
+};
+
+window.resetAdminSession = () => {
+  closeStream('crawl');
+  closeStream('ingest');
+  closeStream('jobs');
+  currentCrawlJobId = null;
+  currentIngestJobId = null;
+  currentJobLogId = null;
+  setStatus('saveCrawlStatus', '');
+  setStatus('crawlLogStatus', '');
+  setStatus('ingestLogStatus', '');
+  setStatus('clearVectorsStatus', '');
+  setStatus('savePromptsStatus', '');
+  setStatus('jobLogStatus', '');
+  const crawlLog = document.getElementById('crawlLog');
+  const ingestLog = document.getElementById('ingestLog');
+  const jobLog = document.getElementById('jobLog');
+  if (crawlLog) crawlLog.textContent = '';
+  if (ingestLog) ingestLog.textContent = '';
+  if (jobLog) jobLog.textContent = '';
+};

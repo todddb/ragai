@@ -389,14 +389,22 @@ async function loadConversation(conversationIdToLoad, options = {}) {
 function updateStatus(payload) {
   const label = STATUS_LABELS[payload.stage] || 'Status';
   lastStatus = `${label}: ${payload.message}`;
+  if (!currentStreamStatus) {
+    const assistantMessage = addMessage('assistant', '');
+    currentStreamStatus = assistantMessage.statusLine;
+    currentStreamContent = assistantMessage.contentNode;
+  }
   if (currentStreamStatus) {
     currentStreamStatus.textContent = lastStatus;
   }
 }
 
 function setStatusMessage(message, type = '', options = {}) {
-  const statusText = document.getElementById('statusText');
+  const statusText = document.getElementById('chatStatus');
   const { temporary = false } = options;
+  if (!statusText) {
+    return;
+  }
   statusText.textContent = message;
   statusText.classList.remove('success', 'error');
   if (type) {
