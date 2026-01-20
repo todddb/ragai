@@ -1,21 +1,19 @@
-user_agent: "RagAI-Crawler/1.0"
-request_delay: 1.0
+user_agent: RagAI-Crawler/1.0
+request_delay: 1
 max_depth: 3
 timeout: 30
-
 url_canonicalization:
   preserve_query_params: []
   blocked_params:
-    - utm_source
-    - utm_medium
-    - utm_campaign
-    - fbclid
-    - gclid
-
+  - utm_source
+  - utm_medium
+  - utm_campaign
+  - fbclid
+  - gclid
 playwright:
   enabled: true
   headless: true
   storage_state_path: /app/secrets/playwright/policy-byu-storageState.json
   use_for_domains:
-    - policy.byu.edu
+  - policy.byu.edu
   navigation_timeout_ms: 60000

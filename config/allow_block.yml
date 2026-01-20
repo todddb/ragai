@@ -1,10 +1,7 @@
-seed_urls: []
-
-allowed_domains: []
-
-blocked_domains: []
-
-blocked_paths:
-  - /login
-  - /logout
-  - /signup
+seed_urls:
+- https://policy.byu.edu
+allowed_domains:
+- policy.byu.edu
+blocked_domains:
+- cas.byu.edu
+- login.byu.edu

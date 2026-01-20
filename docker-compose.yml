@@ -32,7 +32,7 @@ services:
     build: ./services/api
     container_name: ragai-api
     volumes:
-      - ./config:/app/config:ro
+      - ./config:/app/config
       - ./secrets:/app/secrets:ro
       - ./data:/app/data
     ports:
@@ -49,7 +49,7 @@ services:
     build: ./services/crawler
     container_name: ragai-crawler
     volumes:
-      - ./config:/app/config:ro
+      - ./config:/app/config
       - ./secrets:/app/secrets:ro
       - ./data:/app/data
     environment:
@@ -60,7 +60,7 @@ services:
     build: ./services/ingestor
     container_name: ragai-ingestor
     volumes:
-      - ./config:/app/config:ro
+      - ./config:/app/config
       - ./data:/app/data
     environment:
       - OLLAMA_HOST=http://ollama:11434
