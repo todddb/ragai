@@ -32,6 +32,52 @@ Configs live in `config/`:
 
 Admin tokens must be placed in `secrets/admin_tokens` (one token per line).
 
+## GPU Acceleration (Ollama + NVIDIA)
+
+To enable GPU-accelerated inference with Ollama (recommended for RTX-class GPUs), ensure the
+host has NVIDIA drivers installed and that Docker can access the GPU.
+
+### WSL2 (Ubuntu) Prerequisites
+
+1. Verify GPU visibility in WSL2:
+
+```bash
+nvidia-smi
+```
+
+2. Install NVIDIA Container Toolkit (if not already installed):
+
+```bash
+sudo apt-get update
+sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
+3. Confirm Docker can access the GPU:
+
+```bash
+docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
+```
+
+### Compose Configuration
+
+The `ollama` service is configured to request NVIDIA GPUs (see `docker-compose.yml`) and sets:
+
+- `OLLAMA_NUM_GPU=1`
+- `OLLAMA_GPU_OVERHEAD=0`
+
+### Verifying GPU Usage
+
+Run the helper script after starting the stack:
+
+```bash
+./tools/verify_gpu.sh
+```
+
+The script prints `nvidia-smi` output before/after a short generation against Ollama and should
+show non-zero GPU utilization during the request.
+
 ## ragaictl Commands
 
 ```bash
@@ -60,7 +106,7 @@ Project dumps are written to `dumps/` by default.
 ### Conversations
 
 Use the Conversations page to manage saved threads:
-- Open a conversation by clicking **Open** to jump into `chat.html` with the selected `conversation_id`.
+- Open a conversation by selecting the conversation card to jump into `chat.html` with the selected `conversation_id`.
 - Rename inline, delete, or export a conversation log.
 
 ### Admin Workflow

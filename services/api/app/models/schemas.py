@@ -35,3 +35,7 @@ class ValidationOutput(BaseModel):
     needs_clarification: bool
     clarifying_question: Optional[str] = None
     reasoning: Optional[str] = None
+
+
+class TitleOutput(BaseModel):
+    title: str

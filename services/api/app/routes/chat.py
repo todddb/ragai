@@ -11,7 +11,7 @@ from app.agents.intent import analyze_intent
 from app.agents.research import summarize_research
 from app.agents.synthesis import synthesize_answer
 from app.agents.validation import validate_answer
-from app.models.schemas import ResearchOutput
+from app.models.schemas import ResearchOutput, TitleOutput
 from app.utils.config import load_system_config
 from app.utils.db import (
     add_message,
@@ -22,6 +22,7 @@ from app.utils.db import (
     list_messages,
     update_conversation,
 )
+from app.utils.ollama import call_ollama_json
 from app.utils.embeddings import embed_text
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -92,6 +93,53 @@ def _dedupe_hits(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def _chunk_text(text: str, chunk_size: int = 20) -> List[str]:
     return [text[index : index + chunk_size] for index in range(0, len(text), chunk_size)]
+
+
+def _extract_message_text(message: Dict[str, Any]) -> str:
+    content = message.get("content")
+    if not content:
+        return ""
+    if isinstance(content, dict):
+        return str(content.get("text", "")).strip()
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return str(content).strip()
+    return str(parsed.get("text", "")).strip()
+
+
+@router.post("/{conversation_id}/title/auto")
+async def auto_title_conversation(conversation_id: str) -> Dict[str, str]:
+    conversation = get_conversation(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if conversation.get("auto_titled"):
+        return {"title": conversation.get("title", "")}
+    if conversation.get("title") and conversation.get("title") != "New Conversation":
+        return {"title": conversation.get("title", "")}
+
+    messages = list_messages(conversation_id)
+    user_message = next((msg for msg in messages if msg.get("role") == "user"), None)
+    assistant_message = next((msg for msg in messages if msg.get("role") == "assistant"), None)
+    if not user_message or not assistant_message:
+        raise HTTPException(status_code=400, detail="Not enough messages to auto-title")
+
+    user_text = _extract_message_text(user_message)
+    assistant_text = _extract_message_text(assistant_message)
+    prompt = (
+        "Generate a concise 3-7 word conversation title based on this exchange.\n"
+        "Return ONLY JSON: {\"title\": \"...\"}\n"
+        "Rules: no punctuation, no markdown, no quotes inside the title.\n"
+        f"User: {user_text}\n"
+        f"Assistant: {assistant_text}"
+    )
+
+    result = await call_ollama_json(prompt, TitleOutput)
+    title = " ".join(result.title.strip().split())
+    if not title:
+        raise HTTPException(status_code=500, detail="Failed to generate title")
+    update_conversation(conversation_id, title, auto_titled=True)
+    return {"title": title}
 
 
 async def _stream_chat(conversation_id: str, user_text: str) -> AsyncGenerator[str, None]:

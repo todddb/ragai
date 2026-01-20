@@ -24,7 +24,8 @@ def init_db() -> None:
                 created_at TEXT,
                 updated_at TEXT,
                 title TEXT,
-                summary TEXT
+                summary TEXT,
+                auto_titled INTEGER DEFAULT 0
             );
             """
         )
@@ -40,6 +41,9 @@ def init_db() -> None:
             );
             """
         )
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(conversations)").fetchall()}
+        if "auto_titled" not in columns:
+            conn.execute("ALTER TABLE conversations ADD COLUMN auto_titled INTEGER DEFAULT 0")
 
 
 def create_conversation() -> str:
@@ -47,8 +51,11 @@ def create_conversation() -> str:
     now = datetime.utcnow().isoformat()
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO conversations (id, created_at, updated_at, title, summary) VALUES (?, ?, ?, ?, ?)",
-            (conversation_id, now, now, "New Conversation", ""),
+            """
+            INSERT INTO conversations (id, created_at, updated_at, title, summary, auto_titled)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (conversation_id, now, now, "New Conversation", "", 0),
         )
     return conversation_id
 
@@ -67,13 +74,19 @@ def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
-def update_conversation(conversation_id: str, title: str) -> None:
+def update_conversation(conversation_id: str, title: str, auto_titled: Optional[bool] = None) -> None:
     now = datetime.utcnow().isoformat()
     with _connect() as conn:
-        conn.execute(
-            "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
-            (title, now, conversation_id),
-        )
+        if auto_titled is None:
+            conn.execute(
+                "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
+                (title, now, conversation_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE conversations SET title = ?, updated_at = ?, auto_titled = ? WHERE id = ?",
+                (title, now, int(auto_titled), conversation_id),
+            )
 
 
 def delete_conversation(conversation_id: str) -> None:
