@@ -1,6 +1,8 @@
 let conversationId = null;
 let lastStatus = '';
 let statusTimeout = null;
+let currentStreamStatus = null;
+let currentStreamContent = null;
 
 const STATUS_LABELS = {
   intent: 'Intent',
@@ -229,6 +231,9 @@ function addMessage(role, text, timestamp, content = null) {
   const message = document.createElement('div');
   message.className = `message ${role}`;
 
+  let statusLine = null;
+  let contentNode = null;
+
   if (role === 'assistant') {
     const avatar = document.createElement('div');
     avatar.className = 'avatar';
@@ -239,8 +244,15 @@ function addMessage(role, text, timestamp, content = null) {
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble';
   if (role === 'assistant') {
-    bubble.classList.add('markdown-body');
-    bubble.innerHTML = renderMarkdown(text);
+    statusLine = document.createElement('div');
+    statusLine.className = 'assistant-status';
+
+    contentNode = document.createElement('div');
+    contentNode.className = 'markdown-body';
+    contentNode.innerHTML = renderMarkdown(text);
+
+    bubble.appendChild(statusLine);
+    bubble.appendChild(contentNode);
   } else {
     bubble.textContent = text;
   }
@@ -274,14 +286,14 @@ function addMessage(role, text, timestamp, content = null) {
   message.appendChild(wrapper);
   container.appendChild(message);
   container.scrollTop = container.scrollHeight;
-  return bubble;
+  return { bubble, statusLine, contentNode };
 }
 
-function createStreamRenderer(bubble) {
+function createStreamRenderer(contentNode) {
   let text = '';
   let pendingRender = false;
   const render = () => {
-    bubble.innerHTML = renderMarkdown(text);
+    contentNode.innerHTML = renderMarkdown(text);
   };
   const interval = setInterval(() => {
     if (!pendingRender) {
@@ -339,6 +351,8 @@ function clearConversationUI() {
   document.getElementById('chatContainer').innerHTML = '';
   setStatusMessage('');
   lastStatus = '';
+  currentStreamStatus = null;
+  currentStreamContent = null;
 }
 
 async function loadConversation(conversationIdToLoad, options = {}) {
@@ -373,6 +387,10 @@ async function loadConversation(conversationIdToLoad, options = {}) {
 function updateStatus(payload) {
   const label = STATUS_LABELS[payload.stage] || 'Status';
   lastStatus = `${label}: ${payload.message}`;
+  if (currentStreamStatus) {
+    currentStreamStatus.textContent = lastStatus;
+    return;
+  }
   setStatusMessage(lastStatus);
 }
 
@@ -432,8 +450,13 @@ async function sendMessage() {
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
-    const assistantBubble = addMessage('assistant', '');
-    const renderer = createStreamRenderer(assistantBubble);
+    const assistantMessage = addMessage('assistant', '');
+    currentStreamStatus = assistantMessage.statusLine;
+    currentStreamContent = assistantMessage.contentNode;
+    if (currentStreamStatus) {
+      currentStreamStatus.textContent = lastStatus;
+    }
+    const renderer = createStreamRenderer(currentStreamContent);
     let buffer = '';
     let doneReceived = false;
 
@@ -473,6 +496,11 @@ async function sendMessage() {
           doneReceived = true;
           setStatusMessage('');
           lastStatus = '';
+          if (currentStreamStatus) {
+            currentStreamStatus.textContent = '';
+          }
+          currentStreamStatus = null;
+          currentStreamContent = null;
           renderer.finish();
           await loadConversation(conversationId, { updateUrl: false });
         }
