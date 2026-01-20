@@ -2,7 +2,6 @@ from pathlib import Path
 from typing import Dict, Tuple
 
 import httpx
-from playwright.sync_api import sync_playwright
 
 
 def fetch_resource_httpx(
@@ -26,6 +25,8 @@ def fetch_html_playwright(
     headless: bool,
     timeout_ms: int,
 ) -> str:
+    from playwright.sync_api import sync_playwright
+
     storage_state = Path(storage_state_path)
     if not storage_state.exists():
         raise FileNotFoundError(f"Playwright storage state not found: {storage_state_path}")

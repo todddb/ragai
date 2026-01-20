@@ -17,3 +17,9 @@ playwright:
   use_for_domains:
   - policy.byu.edu
   navigation_timeout_ms: 60000
+structured_store:
+  enabled: true
+  sqlite_path: /app/data/sqlite/structured.db
+  xlsx_ingest:
+    max_cells: 50000
+    batch_size: 2000
