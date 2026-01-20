@@ -31,17 +31,6 @@
 
   <main class="settings-layout">
     <section class="settings-section">
-      <h2>API URL Override</h2>
-      <p class="settings-help">
-        Override the API base URL used by the UI. This updates <code>localStorage.API_URL</code> and reloads.
-      </p>
-      <div class="settings-row">
-        <input type="url" id="apiUrlInput" placeholder="http://localhost:8000" />
-        <button class="btn btn-primary" id="saveApiUrl">Save & Reload</button>
-      </div>
-    </section>
-
-    <section class="settings-section">
       <h2>Access</h2>
       <div class="segmented-control mode-toggle" role="tablist" aria-label="Settings mode">
         <span class="segmented-indicator" aria-hidden="true"></span>
@@ -92,7 +81,7 @@
               </div>
 
               <div class="field">
-                <label>Seed URLs</label>
+                <h3 class="section-heading">Seed URLs</h3>
                 <div id="seedList" class="list"></div>
                 <div class="list-add">
                   <input id="seedAddInput" type="text" placeholder="https://www.example.com/site/" />
@@ -101,7 +90,7 @@
               </div>
 
               <div class="field">
-                <label>Allowed URLs</label>
+                <h3 class="section-heading">Allowed URLs</h3>
                 <div class="allowed-table" id="allowTable"></div>
                 <div class="list-add">
                   <input id="allowAddInput" type="text" placeholder="https://www.byu.edu/hr/" />
@@ -120,13 +109,14 @@
                 </div>
 
                 <div class="recommendations">
-                  <div class="rec-header">Recommendations</div>
+                  <h4 class="rec-header">Recommendations</h4>
                   <div id="allowRecommendations" class="rec-list"></div>
+                  <button class="btn btn-small expand-recommendations" id="expandRecommendations" style="display: none; margin-top: 8px;">Show More</button>
                 </div>
               </div>
 
               <div class="field">
-                <label>Blocked Domains</label>
+                <h3 class="section-heading">Blocked Domains</h3>
                 <div id="blockedList" class="list"></div>
                 <div class="list-add">
                   <input id="blockedAddInput" type="text" placeholder="example.com" />
@@ -247,6 +237,17 @@
             </div>
           </div>
         </section>
+      </div>
+    </section>
+
+    <section class="settings-section">
+      <h2>API URL Override</h2>
+      <p class="settings-help">
+        Override the API base URL used by the UI. This updates <code>localStorage.API_URL</code> and reloads.
+      </p>
+      <div class="settings-row">
+        <input type="url" id="apiUrlInput" placeholder="http://localhost:8000" />
+        <button class="btn btn-primary" id="saveApiUrl">Save & Reload</button>
       </div>
     </section>
 
