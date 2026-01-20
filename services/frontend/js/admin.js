@@ -5,7 +5,8 @@ let cachedCrawlerConfig = {};
 const crawlState = {
   seeds: [],
   blocked: [],
-  allowRules: []
+  allowRules: [],
+  allowHttp: false
 };
 let allowRecommendations = [];
 let recommendationsExpanded = false;
@@ -70,6 +71,49 @@ function normalizeAllowRule(rule) {
   };
 }
 
+function normalizeUrlInput(input) {
+  let url = input.trim();
+  if (!url) return '';
+
+  // If no scheme, add https://
+  if (!url.match(/^https?:\/\//i)) {
+    url = 'https://' + url;
+  }
+
+  // If "Allow HTTP" is unchecked, convert http:// to https://
+  if (!crawlState.allowHttp && url.match(/^http:\/\//i)) {
+    url = url.replace(/^http:\/\//i, 'https://');
+  }
+
+  // Normalize trailing slash for host-only patterns
+  try {
+    const parsed = new URL(url);
+    if (!parsed.pathname || parsed.pathname === '') {
+      url = url + '/';
+    }
+  } catch (e) {
+    // If URL parsing fails, just return what we have
+  }
+
+  return url;
+}
+
+function normalizeDomainInput(input) {
+  let domain = input.trim();
+  if (!domain) return '';
+
+  // Strip scheme if present
+  domain = domain.replace(/^https?:\/\//i, '');
+
+  // Strip path if present (keep only domain)
+  const slashIndex = domain.indexOf('/');
+  if (slashIndex !== -1) {
+    domain = domain.substring(0, slashIndex);
+  }
+
+  return domain;
+}
+
 function renderSeedList() {
   const list = document.getElementById('seedList');
   if (!list) return;
@@ -90,7 +134,7 @@ function renderSeedList() {
       cancel.className = 'btn btn-small';
       cancel.textContent = 'Cancel';
       save.addEventListener('click', () => {
-        const value = input.value.trim();
+        const value = normalizeUrlInput(input.value);
         if (value) {
           crawlState.seeds[index] = value;
         }
@@ -152,7 +196,7 @@ function renderBlockedList() {
       cancel.className = 'btn btn-small';
       cancel.textContent = 'Cancel';
       save.addEventListener('click', () => {
-        const value = input.value.trim();
+        const value = normalizeDomainInput(input.value);
         if (value) {
           crawlState.blocked[index] = value;
         }
@@ -267,7 +311,7 @@ function renderAllowTable() {
     edit.addEventListener('click', () => {
       if (editState.allow === index) {
         const input = urlCell.querySelector('input');
-        const value = input?.value.trim();
+        const value = normalizeUrlInput(input?.value || '');
         if (value) {
           rule.pattern = value;
         }
@@ -467,6 +511,7 @@ async function loadConfigs() {
   const allow = await fetch(`${API_BASE}/api/admin/config/allow_block`).then((r) => r.json());
   crawlState.seeds = allow.seed_urls || [];
   crawlState.blocked = allow.blocked_domains || [];
+  crawlState.allowHttp = Boolean(allow.allow_http);
   if (Array.isArray(allow.allow_rules) && allow.allow_rules.length > 0) {
     crawlState.allowRules = allow.allow_rules.map((rule) => normalizeAllowRule(rule));
   } else {
@@ -478,6 +523,10 @@ async function loadConfigs() {
         types: { web: true }
       })
     );
+  }
+  const allowHttpCheckbox = document.getElementById('allowHttpCheckbox');
+  if (allowHttpCheckbox) {
+    allowHttpCheckbox.checked = crawlState.allowHttp;
   }
   editState.seed = null;
   editState.blocked = null;
@@ -517,9 +566,14 @@ async function loadRecommendations() {
 }
 
 async function saveCrawlConfig() {
+  const allowHttpCheckbox = document.getElementById('allowHttpCheckbox');
+  if (allowHttpCheckbox) {
+    crawlState.allowHttp = allowHttpCheckbox.checked;
+  }
   const allowPayload = {
     seed_urls: crawlState.seeds,
     blocked_domains: crawlState.blocked,
+    allow_http: crawlState.allowHttp,
     allow_rules: crawlState.allowRules.map((rule) => ({
       pattern: rule.pattern,
       match: rule.match || 'prefix',
@@ -568,7 +622,7 @@ async function saveCrawlConfig() {
 function addSeedFromInput() {
   const input = document.getElementById('seedAddInput');
   if (!input) return;
-  const value = input.value.trim();
+  const value = normalizeUrlInput(input.value);
   if (!value) return;
   crawlState.seeds.push(value);
   input.value = '';
@@ -578,7 +632,7 @@ function addSeedFromInput() {
 function addBlockedFromInput() {
   const input = document.getElementById('blockedAddInput');
   if (!input) return;
-  const value = input.value.trim();
+  const value = normalizeDomainInput(input.value);
   if (!value) return;
   crawlState.blocked.push(value);
   input.value = '';
@@ -589,7 +643,7 @@ function addAllowFromInput() {
   const input = document.getElementById('allowAddInput');
   const match = document.getElementById('allowAddMatch');
   if (!input || !match) return;
-  const value = input.value.trim();
+  const value = normalizeUrlInput(input.value);
   if (!value) return;
   const types = {
     web: document.getElementById('allowAddWeb')?.checked ?? true,
@@ -641,8 +695,73 @@ function streamLog(jobId, targetId, streamKey) {
   eventSource.onmessage = (event) => {
     logArea.textContent += `${event.data}\n`;
     logArea.scrollTop = logArea.scrollHeight;
+
+    // Check if crawl is complete by looking for the completion message
+    if (streamKey === 'crawl' && event.data.includes('Crawl job complete')) {
+      setTimeout(() => loadCrawlSummary(jobId), 1000);
+    }
   };
   logStreams[streamKey] = eventSource;
+}
+
+async function loadCrawlSummary(jobId) {
+  const summaryPanel = document.getElementById('crawlSummary');
+  const summaryContent = document.getElementById('crawlSummaryContent');
+  if (!summaryPanel || !summaryContent) return;
+
+  try {
+    const response = await fetch(`${API_BASE}/api/admin/jobs/${jobId}/summary`);
+    if (!response.ok) {
+      summaryPanel.style.display = 'none';
+      return;
+    }
+    const summary = await response.json();
+
+    const totalSkipped = (summary.skipped_already_processed || 0) +
+                        (summary.skipped_depth || 0) +
+                        (summary.skipped_not_allowed || 0);
+
+    let html = `
+      <div class="info-grid">
+        <div>
+          <div class="field-label">Total Candidates</div>
+          <div class="info-value">${summary.total_candidates || 0}</div>
+        </div>
+        <div>
+          <div class="field-label">Crawled</div>
+          <div class="info-value">${summary.crawled || 0}</div>
+        </div>
+        <div>
+          <div class="field-label">Successfully Captured</div>
+          <div class="info-value">${summary.captured || 0}</div>
+        </div>
+        <div>
+          <div class="field-label">Errors</div>
+          <div class="info-value">${summary.errors || 0}</div>
+        </div>
+        <div>
+          <div class="field-label">Skipped</div>
+          <div class="info-value">${totalSkipped}</div>
+        </div>
+      </div>
+    `;
+
+    if (summary.error_details && summary.error_details.length > 0) {
+      html += `
+        <div style="margin-top: 12px;">
+          <div class="field-label">Recent Errors:</div>
+          <div style="font-size: 12px; color: #666; max-height: 100px; overflow-y: auto;">
+            ${summary.error_details.map(err => `<div>• ${err}</div>`).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    summaryContent.innerHTML = html;
+    summaryPanel.style.display = 'block';
+  } catch (error) {
+    summaryPanel.style.display = 'none';
+  }
 }
 
 async function triggerJob(type) {
@@ -650,6 +769,10 @@ async function triggerJob(type) {
   const data = await response.json();
   if (type === 'crawl') {
     currentCrawlJobId = data.job_id;
+    const summaryPanel = document.getElementById('crawlSummary');
+    if (summaryPanel) {
+      summaryPanel.style.display = 'none';
+    }
     streamLog(currentCrawlJobId, 'crawlLog', 'crawl');
   } else {
     currentIngestJobId = data.job_id;
@@ -680,7 +803,7 @@ async function loadJobs() {
       <td>${job.started_at}</td>
       <td>${job.ended_at || '-'}</td>
       <td class="actions">
-        <button class="btn" data-action="view" data-id="${job.job_id}">View Log</button>
+        <button class="btn" data-action="view" data-id="${job.job_id}" data-type="${job.job_type}">View Log</button>
         <button class="btn" data-action="export" data-id="${job.job_id}">Export</button>
         <button class="btn" data-action="delete" data-id="${job.job_id}">Delete</button>
       </td>
@@ -722,6 +845,12 @@ async function deleteCurrentLog(jobId, statusTarget, streamKey, logTargetId) {
   if (deleted) {
     closeStream(streamKey);
     document.getElementById(logTargetId).textContent = '';
+    if (streamKey === 'crawl') {
+      const summaryPanel = document.getElementById('crawlSummary');
+      if (summaryPanel) {
+        summaryPanel.style.display = 'none';
+      }
+    }
     setStatus(statusTarget, 'Deleted');
   }
   loadJobs();
@@ -817,16 +946,38 @@ document.getElementById('deleteJobLog').addEventListener('click', () => {
   currentJobLogId = null;
 });
 
+document.getElementById('purgeCandidates')?.addEventListener('click', async () => {
+  if (!confirm('Purge all candidates and processed history? This cannot be undone.')) {
+    return;
+  }
+  const statusTarget = 'purgeCandidatesStatus';
+  try {
+    const response = await fetch(`${API_BASE}/api/admin/candidates/purge`, { method: 'POST' });
+    if (response.ok) {
+      setStatus(statusTarget, 'Purged successfully');
+    } else {
+      setStatus(statusTarget, 'Error purging candidates', 'error');
+    }
+  } catch (error) {
+    setStatus(statusTarget, 'Error purging candidates', 'error');
+  }
+});
+
 document.getElementById('jobTable').addEventListener('click', async (event) => {
   const target = event.target;
   if (!target.dataset || !target.dataset.action) {
     return;
   }
   const jobId = target.dataset.id;
+  const jobType = target.dataset.type;
   if (target.dataset.action === 'view') {
     currentJobLogId = jobId;
     streamLog(jobId, 'jobLog', 'jobs');
     setStatus('jobLogStatus', '');
+    // Load summary for crawl jobs when viewing from history
+    if (jobType === 'crawl') {
+      setTimeout(() => loadCrawlSummary(jobId), 500);
+    }
   }
   if (target.dataset.action === 'export') {
     await exportJobLog(jobId, `job_${jobId}.log`);
@@ -866,7 +1017,9 @@ window.resetAdminSession = () => {
   const crawlLog = document.getElementById('crawlLog');
   const ingestLog = document.getElementById('ingestLog');
   const jobLog = document.getElementById('jobLog');
+  const summaryPanel = document.getElementById('crawlSummary');
   if (crawlLog) crawlLog.textContent = '';
   if (ingestLog) ingestLog.textContent = '';
   if (jobLog) jobLog.textContent = '';
+  if (summaryPanel) summaryPanel.style.display = 'none';
 };

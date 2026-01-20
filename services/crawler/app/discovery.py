@@ -30,6 +30,8 @@ def is_allowed(url: str, config: Dict[str, List[str]]) -> bool:
     for blocked in config.get("blocked_paths", []):
         if path.startswith(blocked):
             return False
+
+    # Check allow_rules if present
     allow_rules = config.get("allow_rules", [])
     if allow_rules:
         for rule in allow_rules:
@@ -44,6 +46,8 @@ def is_allowed(url: str, config: Dict[str, List[str]]) -> bool:
             if match_type != "exact" and pattern and url.startswith(pattern):
                 return True
         return False
+
+    # Fallback to allowed_domains if no allow_rules
     allowed_domains = config.get("allowed_domains", [])
     if allowed_domains and host not in allowed_domains:
         return False
@@ -52,7 +56,9 @@ def is_allowed(url: str, config: Dict[str, List[str]]) -> bool:
 
 def append_candidates(urls: Iterable[str], source: str, depth: int) -> None:
     crawler_config = load_crawler_config()
+    allow_block_config = load_allow_block()
     max_depth = crawler_config.get("max_depth", 0)
+    allow_http = allow_block_config.get("allow_http", False)
     if depth > max_depth:
         return
     url_config = crawler_config.get("url_canonicalization", {})
@@ -67,7 +73,7 @@ def append_candidates(urls: Iterable[str], source: str, depth: int) -> None:
     CANDIDATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with CANDIDATE_PATH.open("a", encoding="utf-8") as handle:
         for url in urls:
-            canonical = canonicalize_url(url, url_config)
+            canonical = canonicalize_url(url, url_config, allow_http)
             if canonical in seen:
                 continue
             record = {

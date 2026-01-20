@@ -124,8 +124,17 @@
                 </div>
               </div>
 
+              <div class="field">
+                <label style="display: flex; align-items: center; gap: 8px;">
+                  <input type="checkbox" id="allowHttpCheckbox" />
+                  <span>Allow HTTP (by default, all URLs are normalized to HTTPS)</span>
+                </label>
+              </div>
+
               <div class="actions-row align-right">
-                <button class="btn" id="triggerCrawl">Trigger Crawl</button>
+                <button class="btn btn-primary" id="triggerCrawl">Trigger Crawl</button>
+                <button class="btn" id="purgeCandidates">Purge Candidates List</button>
+                <span class="status-text" id="purgeCandidatesStatus"></span>
               </div>
             </section>
 
@@ -156,6 +165,10 @@
                 <h3>Live Log</h3>
               </div>
               <div class="log-area" id="crawlLog"></div>
+              <div id="crawlSummary" class="panel-card" style="display: none; margin-top: 16px;">
+                <h4>Crawl Summary</h4>
+                <div id="crawlSummaryContent"></div>
+              </div>
               <div class="actions-row align-right">
                 <span id="crawlLogStatus" class="status-text"></span>
                 <button class="btn" id="exportCrawlLog">Export Log</button>

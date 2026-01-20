@@ -27,7 +27,7 @@ def _write_log(job_id: str, message: str) -> None:
         handle.write(message + "\n")
 
 
-def start_job(job_type: str, worker: Callable[[Callable[[str], None]], None]) -> JobRecord:
+def start_job(job_type: str, worker: Callable[[Callable[[str], None], str], None]) -> JobRecord:
     job_id = str(uuid.uuid4())
     record = JobRecord(
         job_id=job_id,
@@ -40,7 +40,7 @@ def start_job(job_type: str, worker: Callable[[Callable[[str], None]], None]) ->
 
     def run() -> None:
         try:
-            worker(lambda message: _write_log(job_id, message))
+            worker(lambda message: _write_log(job_id, message), job_id)
             record.status = "completed"
         except Exception as exc:  # pragma: no cover - log errors
             record.status = "failed"
