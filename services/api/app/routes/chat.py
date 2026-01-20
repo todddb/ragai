@@ -95,55 +95,76 @@ def _chunk_text(text: str, chunk_size: int = 20) -> List[str]:
 
 
 async def _stream_chat(conversation_id: str, user_text: str) -> AsyncGenerator[str, None]:
-    history = list_messages(conversation_id)
-    add_message(conversation_id, "user", {"text": user_text})
-
-    yield _format_sse({"type": "status", "stage": "intent", "message": "Analyzing question"})
-    intent = await analyze_intent(history, user_text)
-
-    yield _format_sse({"type": "status", "stage": "research", "message": "Searching knowledge base"})
-    config = load_system_config()
-    hits = []
     try:
-        qdrant = QdrantClient(url=config["qdrant"]["host"])
-        collection = config["qdrant"]["collection"]
-        collections = qdrant.get_collections().collections
-        if any(col.name == collection for col in collections):
-            for query in intent.search_queries:
-                vector = await embed_text(query)
-                search_result = qdrant.search(collection, query_vector=vector, limit=5)
-                for hit in search_result:
-                    payload = hit.payload or {}
-                    hits.append(
-                        {
-                            "doc_id": payload.get("doc_id", ""),
-                            "chunk_id": payload.get("chunk_id", ""),
-                            "url": payload.get("url", ""),
-                            "title": payload.get("title", ""),
-                            "score": hit.score,
-                            "text": payload.get("text", ""),
-                        }
-                    )
-    except Exception:
+        history = list_messages(conversation_id)
+        add_message(conversation_id, "user", {"text": user_text})
+
+        yield _format_sse({"type": "status", "stage": "intent", "message": "Analyzing question"})
+        intent = await analyze_intent(history, user_text)
+
+        yield _format_sse({"type": "status", "stage": "research", "message": "Searching knowledge base"})
+        config = load_system_config()
         hits = []
+        try:
+            qdrant = QdrantClient(url=config["qdrant"]["host"])
+            collection = config["qdrant"]["collection"]
+            collections = qdrant.get_collections().collections
+            if any(col.name == collection for col in collections):
+                for query in intent.search_queries:
+                    vector = await embed_text(query)
+                    search_result = qdrant.search(collection, query_vector=vector, limit=5)
+                    for hit in search_result:
+                        payload = hit.payload or {}
+                        hits.append(
+                            {
+                                "doc_id": payload.get("doc_id", ""),
+                                "chunk_id": payload.get("chunk_id", ""),
+                                "url": payload.get("url", ""),
+                                "title": payload.get("title", ""),
+                                "score": hit.score,
+                                "text": payload.get("text", ""),
+                            }
+                        )
+        except Exception:
+            hits = []
 
-    try:
-        research_output = await summarize_research({"hits": hits, "total_results": len(hits)})
-    except Exception:
-        research_output = ResearchOutput(hits=[], total_results=0)
-    citations = _dedupe_hits(hits)
+        try:
+            research_output = await summarize_research({"hits": hits, "total_results": len(hits)})
+        except Exception:
+            research_output = ResearchOutput(hits=[], total_results=0)
+        citations = _dedupe_hits(hits)
 
-    yield _format_sse({"type": "status", "stage": "synthesis", "message": "Drafting answer"})
-    synthesis = await synthesize_answer(intent.model_dump(), research_output.model_dump())
+        yield _format_sse({"type": "status", "stage": "synthesis", "message": "Drafting answer"})
+        synthesis = await synthesize_answer(intent.model_dump(), research_output.model_dump())
 
-    yield _format_sse({"type": "status", "stage": "validation", "message": "Verifying response"})
-    validation = await validate_answer(user_text, synthesis.draft_answer, research_output.model_dump())
+        yield _format_sse({"type": "status", "stage": "validation", "message": "Verifying response"})
+        validation = await validate_answer(user_text, synthesis.draft_answer, research_output.model_dump())
 
-    if validation.needs_clarification and validation.clarifying_question:
-        yield _format_sse({"type": "token", "text": validation.clarifying_question})
+        if validation.needs_clarification and validation.clarifying_question:
+            yield _format_sse({"type": "token", "text": validation.clarifying_question})
+            yield _format_sse({"type": "done"})
+            assistant_content = {
+                "text": validation.clarifying_question,
+                "citations": citations,
+                "pipeline": {
+                    "intent": intent.model_dump(),
+                    "research": research_output.model_dump(),
+                    "synthesis": synthesis.model_dump(),
+                    "validation": validation.model_dump(),
+                },
+                "metadata": {"processing_time_ms": 0, "model": config["ollama"]["model"]},
+            }
+            add_message(conversation_id, "assistant", assistant_content)
+            return
+
+        final_answer = validation.final_answer or synthesis.draft_answer
+        for token in _chunk_text(final_answer):
+            yield _format_sse({"type": "token", "text": token})
+            await asyncio.sleep(0)
         yield _format_sse({"type": "done"})
+
         assistant_content = {
-            "text": validation.clarifying_question,
+            "text": final_answer,
             "citations": citations,
             "pipeline": {
                 "intent": intent.model_dump(),
@@ -154,26 +175,19 @@ async def _stream_chat(conversation_id: str, user_text: str) -> AsyncGenerator[s
             "metadata": {"processing_time_ms": 0, "model": config["ollama"]["model"]},
         }
         add_message(conversation_id, "assistant", assistant_content)
-        return
-
-    final_answer = validation.final_answer or synthesis.draft_answer
-    for token in _chunk_text(final_answer):
-        yield _format_sse({"type": "token", "text": token})
-        await asyncio.sleep(0)
-    yield _format_sse({"type": "done"})
-
-    assistant_content = {
-        "text": final_answer,
-        "citations": citations,
-        "pipeline": {
-            "intent": intent.model_dump(),
-            "research": research_output.model_dump(),
-            "synthesis": synthesis.model_dump(),
-            "validation": validation.model_dump(),
-        },
-        "metadata": {"processing_time_ms": 0, "model": config["ollama"]["model"]},
-    }
-    add_message(conversation_id, "assistant", assistant_content)
+    except Exception as exc:
+        error_text = f"⚠️ Chat pipeline failed: {exc}"
+        yield _format_sse({"type": "status", "stage": "error", "message": "Chat pipeline failed"})
+        yield _format_sse({"type": "token", "text": error_text})
+        yield _format_sse({"type": "done"})
+        config = load_system_config()
+        assistant_content = {
+            "text": error_text,
+            "citations": [],
+            "pipeline": {"error": str(exc)},
+            "metadata": {"processing_time_ms": 0, "model": config["ollama"]["model"]},
+        }
+        add_message(conversation_id, "assistant", assistant_content)
 
 
 @router.post("/{conversation_id}/message")

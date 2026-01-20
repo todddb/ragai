@@ -1,7 +1,7 @@
 ollama:
   host: http://ollama:11434
   model: qwen2.5:latest
-  embedding_model: nomic-embed-text
+  embedding_model: nomic-embed-text:latest
 
 qdrant:
   host: http://qdrant:6333
