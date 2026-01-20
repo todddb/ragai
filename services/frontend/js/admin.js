@@ -2,11 +2,368 @@ let currentCrawlJobId = null;
 let currentIngestJobId = null;
 let currentJobLogId = null;
 let cachedCrawlerConfig = {};
+const crawlState = {
+  seeds: [],
+  blocked: [],
+  allowRules: []
+};
+let allowRecommendations = [];
+const editState = {
+  seed: null,
+  blocked: null,
+  allow: null
+};
 const logStreams = {
   crawl: null,
   ingest: null,
   jobs: null
 };
+const allowTypeKeys = ['web', 'pdf', 'docx', 'xlsx', 'pptx'];
+
+function getTypeDefaults() {
+  return {
+    web: true,
+    pdf: false,
+    docx: false,
+    xlsx: false,
+    pptx: false
+  };
+}
+
+function normalizeTypes(types) {
+  const defaults = getTypeDefaults();
+  if (!types) {
+    return { ...defaults };
+  }
+  return {
+    web: Boolean(types.web ?? defaults.web),
+    pdf: Boolean(types.pdf ?? defaults.pdf),
+    docx: Boolean(types.docx ?? defaults.docx),
+    xlsx: Boolean(types.xlsx ?? defaults.xlsx),
+    pptx: Boolean(types.pptx ?? defaults.pptx)
+  };
+}
+
+function normalizeAllowRule(rule) {
+  if (!rule) {
+    return {
+      pattern: '',
+      match: 'prefix',
+      types: getTypeDefaults(),
+      playwright: false
+    };
+  }
+  if (typeof rule === 'string') {
+    return {
+      pattern: rule,
+      match: 'prefix',
+      types: getTypeDefaults(),
+      playwright: false
+    };
+  }
+  return {
+    pattern: rule.pattern || '',
+    match: rule.match || 'prefix',
+    types: normalizeTypes(rule.types),
+    playwright: Boolean(rule.playwright)
+  };
+}
+
+function renderSeedList() {
+  const list = document.getElementById('seedList');
+  if (!list) return;
+  list.innerHTML = '';
+  crawlState.seeds.forEach((url, index) => {
+    const row = document.createElement('div');
+    row.className = 'list-row';
+    if (editState.seed === index) {
+      const input = document.createElement('input');
+      input.className = 'list-input';
+      input.value = url;
+      const actions = document.createElement('div');
+      actions.className = 'list-actions';
+      const save = document.createElement('button');
+      save.className = 'btn btn-small';
+      save.textContent = 'Save';
+      const cancel = document.createElement('button');
+      cancel.className = 'btn btn-small';
+      cancel.textContent = 'Cancel';
+      save.addEventListener('click', () => {
+        const value = input.value.trim();
+        if (value) {
+          crawlState.seeds[index] = value;
+        }
+        editState.seed = null;
+        renderSeedList();
+      });
+      cancel.addEventListener('click', () => {
+        editState.seed = null;
+        renderSeedList();
+      });
+      actions.append(save, cancel);
+      row.append(input, actions);
+    } else {
+      const text = document.createElement('div');
+      text.className = 'list-text';
+      text.textContent = url;
+      const actions = document.createElement('div');
+      actions.className = 'list-actions';
+      const edit = document.createElement('button');
+      edit.className = 'icon-btn';
+      edit.setAttribute('aria-label', 'Edit seed URL');
+      edit.textContent = '✏️';
+      const remove = document.createElement('button');
+      remove.className = 'icon-btn';
+      remove.setAttribute('aria-label', 'Delete seed URL');
+      remove.textContent = '🗑️';
+      edit.addEventListener('click', () => {
+        editState.seed = index;
+        renderSeedList();
+      });
+      remove.addEventListener('click', () => {
+        crawlState.seeds.splice(index, 1);
+        renderSeedList();
+      });
+      actions.append(edit, remove);
+      row.append(text, actions);
+    }
+    list.appendChild(row);
+  });
+}
+
+function renderBlockedList() {
+  const list = document.getElementById('blockedList');
+  if (!list) return;
+  list.innerHTML = '';
+  crawlState.blocked.forEach((domain, index) => {
+    const row = document.createElement('div');
+    row.className = 'list-row';
+    if (editState.blocked === index) {
+      const input = document.createElement('input');
+      input.className = 'list-input';
+      input.value = domain;
+      const actions = document.createElement('div');
+      actions.className = 'list-actions';
+      const save = document.createElement('button');
+      save.className = 'btn btn-small';
+      save.textContent = 'Save';
+      const cancel = document.createElement('button');
+      cancel.className = 'btn btn-small';
+      cancel.textContent = 'Cancel';
+      save.addEventListener('click', () => {
+        const value = input.value.trim();
+        if (value) {
+          crawlState.blocked[index] = value;
+        }
+        editState.blocked = null;
+        renderBlockedList();
+      });
+      cancel.addEventListener('click', () => {
+        editState.blocked = null;
+        renderBlockedList();
+      });
+      actions.append(save, cancel);
+      row.append(input, actions);
+    } else {
+      const text = document.createElement('div');
+      text.className = 'list-text';
+      text.textContent = domain;
+      const actions = document.createElement('div');
+      actions.className = 'list-actions';
+      const edit = document.createElement('button');
+      edit.className = 'icon-btn';
+      edit.setAttribute('aria-label', 'Edit blocked domain');
+      edit.textContent = '✏️';
+      const remove = document.createElement('button');
+      remove.className = 'icon-btn';
+      remove.setAttribute('aria-label', 'Delete blocked domain');
+      remove.textContent = '🗑️';
+      edit.addEventListener('click', () => {
+        editState.blocked = index;
+        renderBlockedList();
+      });
+      remove.addEventListener('click', () => {
+        crawlState.blocked.splice(index, 1);
+        renderBlockedList();
+      });
+      actions.append(edit, remove);
+      row.append(text, actions);
+    }
+    list.appendChild(row);
+  });
+}
+
+function renderAllowTable() {
+  const table = document.getElementById('allowTable');
+  if (!table) return;
+  table.innerHTML = '';
+  const header = document.createElement('div');
+  header.className = 'allowed-row allowed-header';
+  header.innerHTML = `
+    <div>URL</div>
+    <div>Match</div>
+    <div>Web</div>
+    <div>PDF</div>
+    <div>DOCX</div>
+    <div>XLSX</div>
+    <div>PPTX</div>
+    <div></div>
+    <div></div>
+  `;
+  table.appendChild(header);
+  crawlState.allowRules.forEach((rule, index) => {
+    const row = document.createElement('div');
+    row.className = 'allowed-row';
+    const urlCell = document.createElement('div');
+    if (editState.allow === index) {
+      const input = document.createElement('input');
+      input.className = 'list-input';
+      input.value = rule.pattern;
+      urlCell.appendChild(input);
+      urlCell.dataset.input = 'true';
+    } else {
+      urlCell.className = 'allowed-url';
+      urlCell.textContent = rule.pattern;
+    }
+
+    let matchCell;
+    if (editState.allow === index) {
+      const select = document.createElement('select');
+      select.innerHTML = `
+        <option value="prefix">prefix</option>
+        <option value="exact">exact</option>
+      `;
+      select.value = rule.match || 'prefix';
+      matchCell = select;
+    } else {
+      const badge = document.createElement('span');
+      badge.className = 'match-badge';
+      badge.textContent = rule.match || 'prefix';
+      matchCell = badge;
+    }
+
+    const checkboxes = allowTypeKeys.map((key) => {
+      const wrapper = document.createElement('label');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = Boolean(rule.types?.[key]);
+      checkbox.addEventListener('change', () => {
+        rule.types[key] = checkbox.checked;
+      });
+      wrapper.appendChild(checkbox);
+      return wrapper;
+    });
+
+    const edit = document.createElement('button');
+    edit.className = 'icon-btn';
+    edit.setAttribute('aria-label', 'Edit allowed URL');
+    edit.textContent = editState.allow === index ? '💾' : '✏️';
+    const remove = document.createElement('button');
+    remove.className = 'icon-btn';
+    remove.setAttribute('aria-label', 'Delete allowed URL');
+    remove.textContent = editState.allow === index ? '✖️' : '🗑️';
+
+    edit.addEventListener('click', () => {
+      if (editState.allow === index) {
+        const input = urlCell.querySelector('input');
+        const value = input?.value.trim();
+        if (value) {
+          rule.pattern = value;
+        }
+        if (matchCell instanceof HTMLSelectElement) {
+          rule.match = matchCell.value;
+        }
+        editState.allow = null;
+      } else {
+        editState.allow = index;
+      }
+      renderAllowTable();
+      renderRecommendations();
+    });
+
+    remove.addEventListener('click', () => {
+      if (editState.allow === index) {
+        editState.allow = null;
+        renderAllowTable();
+      } else {
+        crawlState.allowRules.splice(index, 1);
+        renderAllowTable();
+        renderRecommendations();
+      }
+    });
+
+    row.append(urlCell, matchCell, ...checkboxes, edit, remove);
+    table.appendChild(row);
+  });
+}
+
+function renderRecommendations() {
+  const list = document.getElementById('allowRecommendations');
+  if (!list) return;
+  list.innerHTML = '';
+  const existing = new Set(crawlState.allowRules.map((rule) => rule.pattern));
+  allowRecommendations.forEach((rec) => {
+    const row = document.createElement('div');
+    row.className = 'rec-row';
+    const meta = document.createElement('div');
+    meta.className = 'rec-meta';
+    const text = document.createElement('div');
+    text.textContent = rec.suggested_url;
+    const badge = document.createElement('span');
+    badge.className = 'count-badge';
+    badge.textContent = `seen ${rec.count}x`;
+    meta.append(text, badge);
+    const addButton = document.createElement('button');
+    addButton.className = 'btn btn-small';
+    if (existing.has(rec.suggested_url)) {
+      addButton.textContent = 'Added';
+      addButton.disabled = true;
+    } else {
+      addButton.textContent = '+ Add';
+      addButton.addEventListener('click', () => {
+        const types = normalizeTypes(rec.seen_types);
+        if (!types.web && !types.pdf && !types.docx && !types.xlsx && !types.pptx) {
+          types.web = true;
+        }
+        crawlState.allowRules.push({
+          pattern: rec.suggested_url,
+          match: 'prefix',
+          types,
+          playwright: false
+        });
+        renderAllowTable();
+        renderRecommendations();
+      });
+    }
+    row.append(meta, addButton);
+    list.appendChild(row);
+  });
+}
+
+function renderCrawlUi() {
+  renderSeedList();
+  renderBlockedList();
+  renderAllowTable();
+  renderRecommendations();
+}
+
+function extractAllowedDomains(rules) {
+  const domains = new Set();
+  rules.forEach((rule) => {
+    const pattern = rule.pattern || '';
+    let host = '';
+    try {
+      host = new URL(pattern).hostname;
+    } catch (error) {
+      const stripped = pattern.replace(/^https?:\/\//, '');
+      host = stripped.split('/')[0];
+    }
+    if (host) {
+      domains.add(host);
+    }
+  });
+  return Array.from(domains);
+}
 
 function showTab(name) {
   document.querySelectorAll('.tab-content').forEach((el) => {
@@ -85,9 +442,25 @@ async function unlock() {
 
 async function loadConfigs() {
   const allow = await fetch(`${API_BASE}/api/admin/config/allow_block`).then((r) => r.json());
-  document.getElementById('seedUrls').value = (allow.seed_urls || []).join('\n');
-  document.getElementById('allowedDomains').value = (allow.allowed_domains || []).join('\n');
-  document.getElementById('blockedDomains').value = (allow.blocked_domains || []).join('\n');
+  crawlState.seeds = allow.seed_urls || [];
+  crawlState.blocked = allow.blocked_domains || [];
+  if (Array.isArray(allow.allow_rules) && allow.allow_rules.length > 0) {
+    crawlState.allowRules = allow.allow_rules.map((rule) => normalizeAllowRule(rule));
+  } else {
+    const allowedDomains = allow.allowed_domains || [];
+    crawlState.allowRules = allowedDomains.map((domain) =>
+      normalizeAllowRule({
+        pattern: `https://${domain}/`,
+        match: 'prefix',
+        types: { web: true }
+      })
+    );
+  }
+  editState.seed = null;
+  editState.blocked = null;
+  editState.allow = null;
+  renderCrawlUi();
+  await loadRecommendations();
 
   const agents = await fetch(`${API_BASE}/api/admin/config/agents`).then((r) => r.json());
   document.getElementById('intentPrompt').value = agents.agents.intent.system_prompt || '';
@@ -103,11 +476,34 @@ async function loadConfigs() {
   document.getElementById('playwrightUseDomains').value = (playwright.use_for_domains || []).join('\n');
 }
 
+async function loadRecommendations() {
+  try {
+    const response = await fetch(`${API_BASE}/api/admin/candidates/recommendations`);
+    if (!response.ok) {
+      allowRecommendations = [];
+      renderRecommendations();
+      return;
+    }
+    const data = await response.json();
+    allowRecommendations = data.items || [];
+    renderRecommendations();
+  } catch (error) {
+    allowRecommendations = [];
+    renderRecommendations();
+  }
+}
+
 async function saveCrawlConfig() {
   const allowPayload = {
-    seed_urls: document.getElementById('seedUrls').value.split('\n').filter(Boolean),
-    allowed_domains: document.getElementById('allowedDomains').value.split('\n').filter(Boolean),
-    blocked_domains: document.getElementById('blockedDomains').value.split('\n').filter(Boolean)
+    seed_urls: crawlState.seeds,
+    blocked_domains: crawlState.blocked,
+    allow_rules: crawlState.allowRules.map((rule) => ({
+      pattern: rule.pattern,
+      match: rule.match || 'prefix',
+      types: normalizeTypes(rule.types),
+      playwright: Boolean(rule.playwright)
+    })),
+    allowed_domains: extractAllowedDomains(crawlState.allowRules)
   };
   const existingPlaywright = cachedCrawlerConfig.playwright || {};
   const playwrightPayload = {
@@ -144,6 +540,53 @@ async function saveCrawlConfig() {
   } else {
     setStatus('saveCrawlStatus', 'Error saving config', 'error');
   }
+}
+
+function addSeedFromInput() {
+  const input = document.getElementById('seedAddInput');
+  if (!input) return;
+  const value = input.value.trim();
+  if (!value) return;
+  crawlState.seeds.push(value);
+  input.value = '';
+  renderSeedList();
+}
+
+function addBlockedFromInput() {
+  const input = document.getElementById('blockedAddInput');
+  if (!input) return;
+  const value = input.value.trim();
+  if (!value) return;
+  crawlState.blocked.push(value);
+  input.value = '';
+  renderBlockedList();
+}
+
+function addAllowFromInput() {
+  const input = document.getElementById('allowAddInput');
+  const match = document.getElementById('allowAddMatch');
+  if (!input || !match) return;
+  const value = input.value.trim();
+  if (!value) return;
+  const types = {
+    web: document.getElementById('allowAddWeb')?.checked ?? true,
+    pdf: document.getElementById('allowAddPdf')?.checked ?? false,
+    docx: document.getElementById('allowAddDocx')?.checked ?? false,
+    xlsx: document.getElementById('allowAddXlsx')?.checked ?? false,
+    pptx: document.getElementById('allowAddPptx')?.checked ?? false
+  };
+  if (!types.web && !types.pdf && !types.docx && !types.xlsx && !types.pptx) {
+    types.web = true;
+  }
+  crawlState.allowRules.push({
+    pattern: value,
+    match: match.value,
+    types,
+    playwright: false
+  });
+  input.value = '';
+  renderAllowTable();
+  renderRecommendations();
 }
 
 async function savePrompts() {
@@ -285,7 +728,31 @@ document.querySelectorAll('.tab-button').forEach((btn) => {
   btn.addEventListener('click', () => showTab(btn.dataset.tab));
 });
 
-document.getElementById('saveCrawlConfig').addEventListener('click', saveCrawlConfig);
+document.getElementById('saveCrawlBtn')?.addEventListener('click', saveCrawlConfig);
+document.getElementById('seedAddBtn')?.addEventListener('click', addSeedFromInput);
+document.getElementById('blockedAddBtn')?.addEventListener('click', addBlockedFromInput);
+document.getElementById('allowAddBtn')?.addEventListener('click', addAllowFromInput);
+
+document.getElementById('seedAddInput')?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    addSeedFromInput();
+  }
+});
+
+document.getElementById('blockedAddInput')?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    addBlockedFromInput();
+  }
+});
+
+document.getElementById('allowAddInput')?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    addAllowFromInput();
+  }
+});
 
 document.getElementById('triggerCrawl').addEventListener('click', () => triggerJob('crawl'));
 
