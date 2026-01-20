@@ -20,6 +20,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 SECRETS_PATH = Path("/app/secrets/admin_tokens")
 CONFIG_DIR = Path("/app/config")
 CANDIDATES_PATH = Path("/app/data/candidates/candidates.jsonl")
+PROCESSED_PATH = Path("/app/data/candidates/processed.json")
 
 
 def _load_tokens() -> List[str]:
@@ -119,6 +120,18 @@ async def candidate_recommendations() -> Dict[str, List[Dict[str, Any]]]:
     return {"items": items}
 
 
+@router.post("/candidates/purge")
+async def purge_candidates() -> Dict[str, str]:
+    try:
+        if CANDIDATES_PATH.exists():
+            CANDIDATES_PATH.unlink()
+        if PROCESSED_PATH.exists():
+            PROCESSED_PATH.unlink()
+        return {"status": "ok"}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.post("/crawl")
 async def trigger_crawl() -> Dict[str, str]:
     from app.workers.crawl_worker import run_crawl_job
@@ -171,6 +184,14 @@ async def export_log(job_id: str) -> FileResponse:
     if not log_path.exists():
         raise HTTPException(status_code=404, detail="Log not found")
     return FileResponse(log_path, filename=f"{job_id}.log", media_type="text/plain")
+
+
+@router.get("/jobs/{job_id}/summary")
+async def get_job_summary(job_id: str) -> Dict[str, Any]:
+    summary_path = Path("/app/data/logs/summaries") / f"{job_id}.json"
+    if not summary_path.exists():
+        raise HTTPException(status_code=404, detail="Summary not found")
+    return json.loads(summary_path.read_text(encoding="utf-8"))
 
 
 @router.delete("/jobs/{job_id}")

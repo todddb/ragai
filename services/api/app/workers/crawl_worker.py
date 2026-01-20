@@ -49,10 +49,15 @@ def _load_crawler_config() -> Dict:
     return _load_config(CRAWLER_CONFIG_PATH)
 
 
-def _canonicalize_url(url: str, config: Dict[str, List[str]]) -> str:
+def _canonicalize_url(url: str, config: Dict[str, List[str]], allow_http: bool = False) -> str:
     parsed = urlparse(url)
     scheme = parsed.scheme.lower()
     host = parsed.netloc.lower()
+
+    # Normalize HTTP to HTTPS if allow_http is False
+    if not allow_http and scheme == "http":
+        scheme = "https"
+
     path = parsed.path or "/"
     if path != "/" and path.endswith("/"):
         path = path[:-1]
@@ -87,6 +92,24 @@ def _is_allowed(url: str, config: Dict[str, List[str]]) -> bool:
     for blocked in config.get("blocked_paths", []):
         if path.startswith(blocked):
             return False
+
+    # Check allow_rules if present
+    allow_rules = config.get("allow_rules", [])
+    if allow_rules:
+        for rule in allow_rules:
+            if isinstance(rule, str):
+                pattern = rule
+                match_type = "prefix"
+            else:
+                pattern = rule.get("pattern", "")
+                match_type = rule.get("match", "prefix")
+            if match_type == "exact" and url == pattern:
+                return True
+            if match_type != "exact" and pattern and url.startswith(pattern):
+                return True
+        return False
+
+    # Fallback to allowed_domains if no allow_rules
     allowed_domains = config.get("allowed_domains", [])
     if allowed_domains and host not in allowed_domains:
         return False
@@ -107,7 +130,7 @@ def _save_processed(processed: Set[str]) -> None:
     PROCESSED_PATH.write_text(json.dumps(sorted(processed)), encoding="utf-8")
 
 
-def _append_candidates(urls: Iterable[str], source: str, depth: int, max_depth: int) -> None:
+def _append_candidates(urls: Iterable[str], source: str, depth: int, max_depth: int, allow_http: bool = False) -> None:
     if depth > max_depth:
         return
     crawler_config = _load_crawler_config()
@@ -123,7 +146,7 @@ def _append_candidates(urls: Iterable[str], source: str, depth: int, max_depth: 
     CANDIDATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with CANDIDATE_PATH.open("a", encoding="utf-8") as handle:
         for url in urls:
-            canonical = _canonicalize_url(url, url_config)
+            canonical = _canonicalize_url(url, url_config, allow_http)
             if canonical in seen:
                 continue
             record = {
@@ -160,12 +183,12 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _capture_url(url: str) -> List[str]:
+def _capture_url(url: str, allow_http: bool = False) -> List[str]:
     _require_bs4()
     crawler_config = _load_crawler_config()
     ingest_config = _load_config(INGEST_CONFIG_PATH)
     url_config = crawler_config.get("url_canonicalization", {})
-    canonical = _canonicalize_url(url, url_config)
+    canonical = _canonicalize_url(url, url_config, allow_http)
     headers = {"User-Agent": crawler_config.get("user_agent", "RagAI-Crawler/1.0")}
     delay = crawler_config.get("request_delay", 1.0)
     timeout = crawler_config.get("timeout", 30)
@@ -220,19 +243,36 @@ def _capture_url(url: str) -> List[str]:
     return links
 
 
-def run_crawl_job(log) -> None:
+def run_crawl_job(log, job_id: str = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     allow_block = _load_allow_block()
     crawler_config = _load_crawler_config()
     max_depth = crawler_config.get("max_depth", 0)
+    allow_http = allow_block.get("allow_http", False)
     seeds = allow_block.get("seed_urls", [])
+
+    # Initialize metrics tracking
+    metrics = {
+        "total_candidates": 0,
+        "crawled": 0,
+        "captured": 0,
+        "errors": 0,
+        "skipped_already_processed": 0,
+        "skipped_depth": 0,
+        "skipped_not_allowed": 0,
+        "error_details": []
+    }
+
     log(f"Starting crawl job with {len(seeds)} seed(s)")
-    _append_candidates(seeds, "seed", 0, max_depth)
+    log(f"Allow HTTP: {allow_http}")
+    _append_candidates(seeds, "seed", 0, max_depth, allow_http)
     if not CANDIDATE_PATH.exists():
         log("No candidates to process.")
+        _save_job_summary(job_id, metrics)
         return
     processed = _load_processed()
     candidates = CANDIDATE_PATH.read_text(encoding="utf-8").splitlines()
+    metrics["total_candidates"] = len(candidates)
     log(f"Loaded {len(candidates)} candidate(s)")
     for line in candidates:
         try:
@@ -244,22 +284,55 @@ def run_crawl_job(log) -> None:
         if not url:
             continue
         if url in processed:
+            metrics["skipped_already_processed"] += 1
             continue
         if depth > max_depth:
+            metrics["skipped_depth"] += 1
             processed.add(url)
             _save_processed(processed)
             continue
         if not _is_allowed(url, allow_block):
+            metrics["skipped_not_allowed"] += 1
             processed.add(url)
             _save_processed(processed)
             continue
         log(f"Crawling {url} (depth {depth})")
+        metrics["crawled"] += 1
         try:
-            links = _capture_url(url)
-            _append_candidates(links, url, depth + 1, max_depth)
+            links = _capture_url(url, allow_http)
+            _append_candidates(links, url, depth + 1, max_depth, allow_http)
+            metrics["captured"] += 1
             log(f"Captured {url} with {len(links)} link(s)")
         except Exception as exc:
+            metrics["errors"] += 1
+            error_msg = f"{url}: {str(exc)}"
+            if len(metrics["error_details"]) < 10:  # Keep only first 10 errors
+                metrics["error_details"].append(error_msg)
             log(f"Error capturing {url}: {exc}")
         processed.add(url)
         _save_processed(processed)
+
+    # Save summary at the end
+    _save_job_summary(job_id, metrics)
+
+    # Log summary
+    log("=" * 60)
+    log("Crawl Summary:")
+    log(f"  Total candidates: {metrics['total_candidates']}")
+    log(f"  Crawled: {metrics['crawled']}")
+    log(f"  Successfully captured: {metrics['captured']}")
+    log(f"  Errors: {metrics['errors']}")
+    log(f"  Skipped (already processed): {metrics['skipped_already_processed']}")
+    log(f"  Skipped (depth exceeded): {metrics['skipped_depth']}")
+    log(f"  Skipped (not allowed): {metrics['skipped_not_allowed']}")
+    log("=" * 60)
     log("Crawl job complete")
+
+
+def _save_job_summary(job_id: str, metrics: Dict) -> None:
+    if not job_id:
+        return
+    summary_dir = Path("/app/data/logs/summaries")
+    summary_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = summary_dir / f"{job_id}.json"
+    summary_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")

@@ -3,10 +3,14 @@ from typing import Dict, List
 from urllib.parse import parse_qsl, urlparse, urlunparse
 
 
-def canonicalize_url(url: str, config: Dict[str, List[str]]) -> str:
+def canonicalize_url(url: str, config: Dict[str, List[str]], allow_http: bool = False) -> str:
     parsed = urlparse(url)
     scheme = parsed.scheme.lower()
     host = parsed.netloc.lower()
+
+    # Normalize HTTP to HTTPS if allow_http is False
+    if not allow_http and scheme == "http":
+        scheme = "https"
 
     path = parsed.path or "/"
     if path != "/" and path.endswith("/"):

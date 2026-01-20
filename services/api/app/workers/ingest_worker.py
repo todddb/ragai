@@ -99,7 +99,7 @@ def _doc_ids_on_disk() -> Set[str]:
     return {path.parent.name for path in ARTIFACT_DIR.glob("*/artifact.json")}
 
 
-def run_ingest_job(log) -> None:
+def run_ingest_job(log, job_id: str = None) -> None:
     system_config = _load_config(CONFIG_PATH)
     qdrant_host = system_config["qdrant"]["host"]
     collection = system_config["qdrant"]["collection"]
