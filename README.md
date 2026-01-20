@@ -2,15 +2,38 @@
 
 Local-first agentic RAG system powered by Ollama, Qdrant, and FastAPI.
 
+## Documentation
+
+- **[Installation Guide](docs/INSTALL.md)** - Complete setup instructions, GPU configuration, and Playwright setup
+- **[User Guide](docs/USER_GUIDE.md)** - How to use the chat interface, manage conversations, and configure settings
+- **[Admin Guide](docs/ADMIN_GUIDE.md)** - Admin console, crawl/ingest management, and CLI tool reference
+
 ## Quick Start
+
+### First-Time Setup
+
+For a fully automated setup:
+
+```bash
+git clone <your-repo-url>
+cd ragai
+./tools/ragaictl setup-new
+```
+
+This will create directories, install dependencies, pull Ollama models, build images, and start services.
+
+### Manual Start
+
+If already installed:
 
 ```bash
 ./tools/ragaictl start
 ```
 
 Access:
-- API: http://localhost:8000
-- Frontend: http://localhost:5000
+- **Frontend**: http://localhost:5000
+- **API**: http://localhost:8000
+- **API Docs**: http://localhost:8000/docs
 
 Before your first crawl, update `config/allow_block.yml` with your `seed_urls` and `allowed_domains`.
 
@@ -182,3 +205,15 @@ localStorage.setItem('API_URL', 'http://your-api-host:8000');
 ```
 
 Reload the page to apply the change.
+
+## Learn More
+
+For detailed information on installation, usage, and administration:
+
+- **[Installation Guide](docs/INSTALL.md)** - Prerequisites, setup, GPU acceleration, troubleshooting
+- **[User Guide](docs/USER_GUIDE.md)** - Chat interface, conversations, settings, tips and best practices
+- **[Admin Guide](docs/ADMIN_GUIDE.md)** - Configuration, crawl/ingest management, CLI reference, monitoring
+
+## Contributing
+
+Contributions are welcome! Please see the documentation guides for understanding the codebase structure and features.

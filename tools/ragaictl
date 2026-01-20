@@ -9,6 +9,7 @@ usage() {
 Usage: ragaictl <command> [options]
 
 Commands:
+  setup-new                             Complete first-time setup (creates dirs, installs deps, pulls models)
   start                                 Start ollama/qdrant/api/frontend and show status
   stop                                  Stop all services (docker compose down)
   status                                Show service status
@@ -97,7 +98,152 @@ check_health() {
   fi
 }
 
+setup_new() {
+  echo "==================================="
+  echo "  RagAI First-Time Setup"
+  echo "==================================="
+  echo ""
+
+  # Create directory structure
+  echo "📁 Creating directory structure..."
+  mkdir -p secrets/playwright
+  mkdir -p data/{artifacts,conversations,ingest,logs/jobs,candidates,sqlite}
+  echo "✅ Directories created"
+  echo ""
+
+  # Install system dependencies (Ubuntu/Debian only)
+  if command -v apt-get &> /dev/null; then
+    echo "📦 Installing system dependencies (requires sudo)..."
+    if sudo apt-get update && sudo apt-get install -y curl git python3 python3-pip python3-venv; then
+      echo "✅ System dependencies installed"
+    else
+      echo "⚠️  Warning: Failed to install some dependencies. You may need to install them manually."
+    fi
+    echo ""
+  else
+    echo "ℹ️  Non-Debian system detected. Please install these packages manually:"
+    echo "   - curl, git, python3, python3-pip, python3-venv"
+    echo ""
+  fi
+
+  # Create empty admin tokens file if it doesn't exist
+  if [ ! -f secrets/admin-tokens ]; then
+    echo "🔑 Creating admin tokens file..."
+    touch secrets/admin-tokens
+    chmod 600 secrets/admin-tokens
+
+    # Generate a sample token
+    if command -v openssl &> /dev/null; then
+      SAMPLE_TOKEN=$(openssl rand -hex 32)
+      echo "$SAMPLE_TOKEN" > secrets/admin-tokens
+      echo "✅ Admin token generated and saved to secrets/admin-tokens"
+      echo ""
+      echo "🔐 Your admin token is:"
+      echo "   $SAMPLE_TOKEN"
+      echo ""
+      echo "   Save this token! You'll need it to access the admin interface."
+      echo "   Location: secrets/admin-tokens"
+    else
+      echo "⚠️  openssl not found. Please manually add an admin token to secrets/admin-tokens"
+    fi
+    echo ""
+  else
+    echo "ℹ️  Admin tokens file already exists, skipping token generation"
+    echo ""
+  fi
+
+  # Build Docker images
+  echo "🔨 Building Docker images..."
+  if docker compose build; then
+    echo "✅ Docker images built successfully"
+  else
+    echo "❌ Failed to build Docker images"
+    exit 1
+  fi
+  echo ""
+
+  # Start services
+  echo "🚀 Starting services..."
+  docker compose up -d ollama qdrant api frontend
+  echo ""
+
+  # Wait for Ollama to be ready
+  echo "⏳ Waiting for Ollama to start..."
+  local max_attempts=30
+  local attempt=1
+  while [ $attempt -le $max_attempts ]; do
+    if curl -s -f -m 2 http://localhost:11434/api/version > /dev/null 2>&1; then
+      echo "✅ Ollama is ready"
+      break
+    fi
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+
+  if [ $attempt -gt $max_attempts ]; then
+    echo "❌ Ollama failed to start after ${max_attempts} attempts"
+    echo "   Check logs: ./tools/ragaictl logs ollama"
+    exit 1
+  fi
+  echo ""
+
+  # Pull Ollama models
+  echo "📥 Pulling Ollama models (this may take several minutes)..."
+  echo ""
+
+  echo "   Pulling embedding model: nomic-embed-text:latest"
+  if docker compose exec -T ollama ollama pull nomic-embed-text:latest; then
+    echo "   ✅ nomic-embed-text:latest pulled successfully"
+  else
+    echo "   ❌ Failed to pull nomic-embed-text:latest"
+  fi
+  echo ""
+
+  echo "   Pulling LLM model: llama3.2:latest"
+  if docker compose exec -T ollama ollama pull llama3.2:latest; then
+    echo "   ✅ llama3.2:latest pulled successfully"
+  else
+    echo "   ❌ Failed to pull llama3.2:latest"
+  fi
+  echo ""
+
+  # Verify models
+  echo "📋 Installed models:"
+  docker compose exec -T ollama ollama list
+  echo ""
+
+  # Health check
+  echo "🏥 Running health checks..."
+  check_health || {
+    echo ""
+    echo "⚠️  Setup completed but health checks failed."
+    echo "   Check logs: ./tools/ragaictl logs"
+    exit 1
+  }
+
+  echo ""
+  echo "==================================="
+  echo "  ✅ Setup Complete!"
+  echo "==================================="
+  echo ""
+  echo "Next steps:"
+  echo ""
+  echo "1. Edit config/allow_block.yml to add your seed URLs and allowed domains"
+  echo "2. Access the frontend: http://localhost:5000"
+  echo "3. Access the admin console: http://localhost:5000/settings.html (use the admin token shown above)"
+  echo "4. Start your first crawl from the admin console"
+  echo ""
+  echo "For more information, see:"
+  echo "  - docs/INSTALL.md"
+  echo "  - docs/USER_GUIDE.md"
+  echo "  - docs/ADMIN_GUIDE.md"
+  echo ""
+}
+
 case "$command" in
+  setup-new)
+    setup_new
+    ;;
   start)
     docker compose up -d ollama qdrant api frontend
     docker compose ps
