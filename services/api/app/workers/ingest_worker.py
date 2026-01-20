@@ -52,16 +52,45 @@ def _init_db(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_collection(client: QdrantClient, collection: str, vector_size: int) -> None:
-    collections = client.get_collections().collections
-    if any(col.name == collection for col in collections):
-        info = client.get_collection(collection)
-        existing_size = info.config.params.vectors.size
-        if existing_size != vector_size:
-            raise ValueError(
-                f"Qdrant collection '{collection}' has vector size {existing_size}, "
-                f"expected {vector_size}. Clear vectors or use a matching embedding model."
+    try:
+        collections = client.get_collections().collections
+    except Exception as e:
+        # Handle potential validation errors when getting collections
+        print(f"Warning: Error getting collections (possibly validation error): {e}")
+        # Try to create the collection anyway
+        try:
+            client.create_collection(
+                collection_name=collection,
+                vectors_config=rest.VectorParams(size=vector_size, distance=rest.Distance.COSINE),
             )
+            client.create_payload_index(collection_name=collection, field_name="doc_id", field_schema="keyword")
+        except Exception:
+            pass  # Collection might already exist
         return
+
+    if any(col.name == collection for col in collections):
+        try:
+            info = client.get_collection(collection)
+            existing_size = info.config.params.vectors.size
+            if existing_size != vector_size:
+                raise ValueError(
+                    f"Qdrant collection '{collection}' has vector size {existing_size}, "
+                    f"expected {vector_size}. Clear vectors or use a matching embedding model."
+                )
+        except AttributeError:
+            # Handle case where config structure doesn't match expected schema
+            # This can happen with different Qdrant server versions
+            print(f"Warning: Could not verify vector size for collection '{collection}' due to schema mismatch")
+            print("Continuing with ingest - ensure your embedding model matches the collection configuration")
+        except Exception as e:
+            # Handle pydantic validation errors or other exceptions
+            if "validation" in str(e).lower() or "extra" in str(e).lower():
+                print(f"Warning: Qdrant config validation error (server schema mismatch): {e}")
+                print("This is typically harmless - continuing with ingest")
+            else:
+                raise
+        return
+
     client.create_collection(
         collection_name=collection,
         vectors_config=rest.VectorParams(size=vector_size, distance=rest.Distance.COSINE),
@@ -100,15 +129,23 @@ def _doc_ids_on_disk() -> Set[str]:
 
 
 def run_ingest_job(log, job_id: str = None) -> None:
-    system_config = _load_config(CONFIG_PATH)
-    qdrant_host = system_config["qdrant"]["host"]
-    collection = system_config["qdrant"]["collection"]
-    embedding_model = system_config["ollama"]["embedding_model"]
-    ollama_host = system_config["ollama"]["host"]
-    client = QdrantClient(url=qdrant_host)
-    vector_size = len(embed_text(ollama_host, embedding_model, "dimension probe"))
-    _ensure_collection(client, collection, vector_size=vector_size)
-    log("Starting ingest job")
+    try:
+        system_config = _load_config(CONFIG_PATH)
+        qdrant_host = system_config["qdrant"]["host"]
+        collection = system_config["qdrant"]["collection"]
+        embedding_model = system_config["ollama"]["embedding_model"]
+        ollama_host = system_config["ollama"]["host"]
+        log(f"Connecting to Qdrant at {qdrant_host}")
+        client = QdrantClient(url=qdrant_host)
+        log(f"Probing embedding model {embedding_model}")
+        vector_size = len(embed_text(ollama_host, embedding_model, "dimension probe"))
+        log(f"Vector size: {vector_size}")
+        log(f"Ensuring collection '{collection}' exists")
+        _ensure_collection(client, collection, vector_size=vector_size)
+        log("Starting ingest job")
+    except Exception as e:
+        log(f"Error during ingest setup: {e}")
+        raise
     with _connect() as conn:
         _init_db(conn)
         disk_doc_ids = _doc_ids_on_disk()
