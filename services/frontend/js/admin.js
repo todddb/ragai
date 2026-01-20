@@ -5,8 +5,7 @@ let cachedCrawlerConfig = {};
 const crawlState = {
   seeds: [],
   blocked: [],
-  allowRules: [],
-  forceHttps: true
+  allowRules: []
 };
 let allowRecommendations = [];
 let recommendationsExpanded = false;
@@ -52,7 +51,8 @@ function normalizeAllowRule(rule) {
       pattern: '',
       match: 'prefix',
       types: getTypeDefaults(),
-      playwright: false
+      playwright: false,
+      allow_http: false
     };
   }
   if (typeof rule === 'string') {
@@ -60,36 +60,72 @@ function normalizeAllowRule(rule) {
       pattern: rule,
       match: 'prefix',
       types: getTypeDefaults(),
-      playwright: false
+      playwright: false,
+      allow_http: false
     };
   }
   return {
     pattern: rule.pattern || '',
     match: rule.match || 'prefix',
     types: normalizeTypes(rule.types),
-    playwright: Boolean(rule.playwright)
+    playwright: Boolean(rule.playwright),
+    allow_http: Boolean(rule.allow_http)
   };
 }
 
-function normalizeUrlInput(input) {
+function normalizeSeed(seed) {
+  if (!seed) {
+    return {
+      url: '',
+      allow_http: false
+    };
+  }
+  if (typeof seed === 'string') {
+    return {
+      url: seed,
+      allow_http: false
+    };
+  }
+  return {
+    url: seed.url || '',
+    allow_http: Boolean(seed.allow_http)
+  };
+}
+
+function normalizeUrlRow(input, allowHttp = false) {
   let url = input.trim();
   if (!url) return '';
 
-  // If no scheme, add https://
-  if (!url.match(/^https?:\/\//i)) {
-    url = 'https://' + url;
+  // Reject non-http(s) schemes
+  const schemeMatch = url.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):\/\//);
+  if (schemeMatch && !schemeMatch[1].match(/^https?$/i)) {
+    throw new Error(`Invalid scheme "${schemeMatch[1]}". Only http:// and https:// are allowed.`);
   }
 
-  // If "Force HTTPS" is checked, convert http:// to https://
-  if (crawlState.forceHttps && url.match(/^http:\/\//i)) {
+  // If no scheme, add based on allow_http flag
+  if (!url.match(/^https?:\/\//i)) {
+    url = (allowHttp ? 'http://' : 'https://') + url;
+  }
+
+  // If scheme is http:// and allow_http is false, convert to https://
+  if (!allowHttp && url.match(/^http:\/\//i)) {
     url = url.replace(/^http:\/\//i, 'https://');
+  }
+
+  // Strip fragment
+  const hashIndex = url.indexOf('#');
+  if (hashIndex !== -1) {
+    url = url.substring(0, hashIndex);
   }
 
   // Normalize trailing slash for host-only patterns
   try {
     const parsed = new URL(url);
-    if (!parsed.pathname || parsed.pathname === '') {
-      url = url + '/';
+    if (!parsed.pathname || parsed.pathname === '' || parsed.pathname === '/') {
+      // Ensure trailing slash for root paths
+      if (!url.endsWith('/')) {
+        url = url + '/';
+      }
     }
   } catch (e) {
     // If URL parsing fails, just return what we have
@@ -115,64 +151,98 @@ function normalizeDomainInput(input) {
 }
 
 function renderSeedList() {
-  const list = document.getElementById('seedList');
-  if (!list) return;
-  list.innerHTML = '';
-  crawlState.seeds.forEach((url, index) => {
+  const table = document.getElementById('seedList');
+  if (!table) return;
+  table.innerHTML = '';
+
+  const header = document.createElement('div');
+  header.className = 'seed-row seed-header';
+  header.innerHTML = `
+    <div>URL</div>
+    <div>Allow HTTP</div>
+    <div></div>
+    <div></div>
+  `;
+  table.appendChild(header);
+
+  crawlState.seeds.forEach((seedObj, index) => {
+    const seed = normalizeSeed(seedObj);
     const row = document.createElement('div');
-    row.className = 'list-row';
+    row.className = 'seed-row';
+
+    const urlCell = document.createElement('div');
     if (editState.seed === index) {
       const input = document.createElement('input');
       input.className = 'list-input';
-      input.value = url;
-      const actions = document.createElement('div');
-      actions.className = 'list-actions';
-      const save = document.createElement('button');
-      save.className = 'btn btn-small';
-      save.textContent = 'Save';
-      const cancel = document.createElement('button');
-      cancel.className = 'btn btn-small';
-      cancel.textContent = 'Cancel';
-      save.addEventListener('click', () => {
-        const value = normalizeUrlInput(input.value);
-        if (value) {
-          crawlState.seeds[index] = value;
+      input.value = seed.url;
+      urlCell.appendChild(input);
+      urlCell.dataset.input = 'true';
+    } else {
+      urlCell.className = 'seed-url';
+      urlCell.textContent = seed.url;
+    }
+
+    const allowHttpCell = document.createElement('label');
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = Boolean(seed.allow_http);
+    checkbox.addEventListener('change', () => {
+      seed.allow_http = checkbox.checked;
+      crawlState.seeds[index] = seed;
+      // Re-normalize URL when toggling allow_http
+      try {
+        const normalized = normalizeUrlRow(seed.url, seed.allow_http);
+        seed.url = normalized;
+        crawlState.seeds[index] = seed;
+        renderSeedList();
+      } catch (e) {
+        // Keep the current value if normalization fails
+      }
+    });
+    allowHttpCell.appendChild(checkbox);
+
+    const edit = document.createElement('button');
+    edit.className = 'icon-btn';
+    edit.setAttribute('aria-label', 'Edit seed URL');
+    edit.textContent = editState.seed === index ? '💾' : '✏️';
+
+    const remove = document.createElement('button');
+    remove.className = 'icon-btn';
+    remove.setAttribute('aria-label', 'Delete seed URL');
+    remove.textContent = editState.seed === index ? '✖️' : '🗑️';
+
+    edit.addEventListener('click', () => {
+      if (editState.seed === index) {
+        const input = urlCell.querySelector('input');
+        try {
+          const value = normalizeUrlRow(input?.value || '', seed.allow_http);
+          if (value) {
+            seed.url = value;
+            crawlState.seeds[index] = seed;
+          }
+        } catch (e) {
+          alert(e.message);
+          return;
         }
         editState.seed = null;
-        renderSeedList();
-      });
-      cancel.addEventListener('click', () => {
+      } else {
+        editState.seed = index;
+      }
+      renderSeedList();
+    });
+
+    remove.addEventListener('click', () => {
+      if (editState.seed === index) {
         editState.seed = null;
         renderSeedList();
-      });
-      actions.append(save, cancel);
-      row.append(input, actions);
-    } else {
-      const text = document.createElement('div');
-      text.className = 'list-text';
-      text.textContent = url;
-      const actions = document.createElement('div');
-      actions.className = 'list-actions';
-      const edit = document.createElement('button');
-      edit.className = 'icon-btn';
-      edit.setAttribute('aria-label', 'Edit seed URL');
-      edit.textContent = '✏️';
-      const remove = document.createElement('button');
-      remove.className = 'icon-btn';
-      remove.setAttribute('aria-label', 'Delete seed URL');
-      remove.textContent = '🗑️';
-      edit.addEventListener('click', () => {
-        editState.seed = index;
-        renderSeedList();
-      });
-      remove.addEventListener('click', () => {
+      } else {
         crawlState.seeds.splice(index, 1);
         renderSeedList();
-      });
-      actions.append(edit, remove);
-      row.append(text, actions);
-    }
-    list.appendChild(row);
+      }
+    });
+
+    row.append(urlCell, allowHttpCell, edit, remove);
+    table.appendChild(row);
   });
 }
 
@@ -252,6 +322,7 @@ function renderAllowTable() {
     <div>DOCX</div>
     <div>XLSX</div>
     <div>PPTX</div>
+    <div>Allow HTTP</div>
     <div></div>
     <div></div>
   `;
@@ -299,6 +370,24 @@ function renderAllowTable() {
       return wrapper;
     });
 
+    const allowHttpCell = document.createElement('label');
+    const allowHttpCheckbox = document.createElement('input');
+    allowHttpCheckbox.type = 'checkbox';
+    allowHttpCheckbox.checked = Boolean(rule.allow_http);
+    allowHttpCheckbox.addEventListener('change', () => {
+      rule.allow_http = allowHttpCheckbox.checked;
+      // Re-normalize URL when toggling allow_http
+      try {
+        const normalized = normalizeUrlRow(rule.pattern, rule.allow_http);
+        rule.pattern = normalized;
+        renderAllowTable();
+        renderRecommendations();
+      } catch (e) {
+        // Keep the current value if normalization fails
+      }
+    });
+    allowHttpCell.appendChild(allowHttpCheckbox);
+
     const edit = document.createElement('button');
     edit.className = 'icon-btn';
     edit.setAttribute('aria-label', 'Edit allowed URL');
@@ -311,9 +400,14 @@ function renderAllowTable() {
     edit.addEventListener('click', () => {
       if (editState.allow === index) {
         const input = urlCell.querySelector('input');
-        const value = normalizeUrlInput(input?.value || '');
-        if (value) {
-          rule.pattern = value;
+        try {
+          const value = normalizeUrlRow(input?.value || '', rule.allow_http);
+          if (value) {
+            rule.pattern = value;
+          }
+        } catch (e) {
+          alert(e.message);
+          return;
         }
         if (matchCell instanceof HTMLSelectElement) {
           rule.match = matchCell.value;
@@ -337,7 +431,7 @@ function renderAllowTable() {
       }
     });
 
-    row.append(urlCell, matchCell, ...checkboxes, edit, remove);
+    row.append(urlCell, matchCell, ...checkboxes, allowHttpCell, edit, remove);
     table.appendChild(row);
   });
 }
@@ -384,14 +478,20 @@ function renderRecommendations() {
       if (!types.web && !types.pdf && !types.docx && !types.xlsx && !types.pptx) {
         types.web = true;
       }
-      crawlState.allowRules.push({
-        pattern: rec.suggested_url,
-        match: 'prefix',
-        types,
-        playwright: false
-      });
-      renderAllowTable();
-      renderRecommendations();
+      try {
+        const normalized = normalizeUrlRow(rec.suggested_url, false);
+        crawlState.allowRules.push({
+          pattern: normalized,
+          match: 'prefix',
+          types,
+          playwright: false,
+          allow_http: false
+        });
+        renderAllowTable();
+        renderRecommendations();
+      } catch (e) {
+        alert(`Failed to add recommendation: ${e.message}`);
+      }
     });
     row.append(meta, addButton);
     list.appendChild(row);
@@ -509,32 +609,46 @@ async function unlock() {
 
 async function loadConfigs() {
   const allow = await fetch(`${API_BASE}/api/admin/config/allow_block`).then((r) => r.json());
-  crawlState.seeds = allow.seed_urls || [];
+
+  // Normalize and convert seeds to new structure
+  const rawSeeds = allow.seed_urls || [];
+  crawlState.seeds = rawSeeds.map((seed) => {
+    const normalized = normalizeSeed(seed);
+    // Normalize the URL based on the allow_http flag
+    try {
+      normalized.url = normalizeUrlRow(normalized.url, normalized.allow_http);
+    } catch (e) {
+      // Keep original if normalization fails
+    }
+    return normalized;
+  });
+
   crawlState.blocked = allow.blocked_domains || [];
-  // Support both old allow_http and new force_https for backward compatibility
-  if (allow.force_https !== undefined) {
-    crawlState.forceHttps = Boolean(allow.force_https);
-  } else if (allow.allow_http !== undefined) {
-    crawlState.forceHttps = !Boolean(allow.allow_http);
-  } else {
-    crawlState.forceHttps = true; // Default to forcing HTTPS
-  }
+
+  // Normalize and convert allow rules
   if (Array.isArray(allow.allow_rules) && allow.allow_rules.length > 0) {
-    crawlState.allowRules = allow.allow_rules.map((rule) => normalizeAllowRule(rule));
+    crawlState.allowRules = allow.allow_rules.map((rule) => {
+      const normalized = normalizeAllowRule(rule);
+      // Normalize the pattern based on the allow_http flag
+      try {
+        normalized.pattern = normalizeUrlRow(normalized.pattern, normalized.allow_http);
+      } catch (e) {
+        // Keep original if normalization fails
+      }
+      return normalized;
+    });
   } else {
     const allowedDomains = allow.allowed_domains || [];
     crawlState.allowRules = allowedDomains.map((domain) =>
       normalizeAllowRule({
         pattern: `https://${domain}/`,
         match: 'prefix',
-        types: { web: true }
+        types: { web: true },
+        allow_http: false
       })
     );
   }
-  const forceHttpsCheckbox = document.getElementById('forceHttpsCheckbox');
-  if (forceHttpsCheckbox) {
-    forceHttpsCheckbox.checked = crawlState.forceHttps;
-  }
+
   editState.seed = null;
   editState.blocked = null;
   editState.allow = null;
@@ -573,19 +687,21 @@ async function loadRecommendations() {
 }
 
 async function saveCrawlConfig() {
-  const forceHttpsCheckbox = document.getElementById('forceHttpsCheckbox');
-  if (forceHttpsCheckbox) {
-    crawlState.forceHttps = forceHttpsCheckbox.checked;
-  }
   const allowPayload = {
-    seed_urls: crawlState.seeds,
+    seed_urls: crawlState.seeds.map((seed) => {
+      const normalized = normalizeSeed(seed);
+      return {
+        url: normalized.url,
+        allow_http: normalized.allow_http
+      };
+    }),
     blocked_domains: crawlState.blocked,
-    force_https: crawlState.forceHttps,
     allow_rules: crawlState.allowRules.map((rule) => ({
       pattern: rule.pattern,
       match: rule.match || 'prefix',
       types: normalizeTypes(rule.types),
-      playwright: Boolean(rule.playwright)
+      playwright: Boolean(rule.playwright),
+      allow_http: Boolean(rule.allow_http)
     })),
     allowed_domains: extractAllowedDomains(crawlState.allowRules)
   };
@@ -628,12 +744,22 @@ async function saveCrawlConfig() {
 
 function addSeedFromInput() {
   const input = document.getElementById('seedAddInput');
+  const allowHttpCheckbox = document.getElementById('seedAddAllowHttp');
   if (!input) return;
-  const value = normalizeUrlInput(input.value);
-  if (!value) return;
-  crawlState.seeds.push(value);
-  input.value = '';
-  renderSeedList();
+  const allowHttp = allowHttpCheckbox ? allowHttpCheckbox.checked : false;
+  try {
+    const value = normalizeUrlRow(input.value, allowHttp);
+    if (!value) return;
+    crawlState.seeds.push({
+      url: value,
+      allow_http: allowHttp
+    });
+    input.value = '';
+    if (allowHttpCheckbox) allowHttpCheckbox.checked = false;
+    renderSeedList();
+  } catch (e) {
+    alert(e.message);
+  }
 }
 
 function addBlockedFromInput() {
@@ -649,28 +775,36 @@ function addBlockedFromInput() {
 function addAllowFromInput() {
   const input = document.getElementById('allowAddInput');
   const match = document.getElementById('allowAddMatch');
+  const allowHttpCheckbox = document.getElementById('allowAddAllowHttp');
   if (!input || !match) return;
-  const value = normalizeUrlInput(input.value);
-  if (!value) return;
-  const types = {
-    web: document.getElementById('allowAddWeb')?.checked ?? true,
-    pdf: document.getElementById('allowAddPdf')?.checked ?? false,
-    docx: document.getElementById('allowAddDocx')?.checked ?? false,
-    xlsx: document.getElementById('allowAddXlsx')?.checked ?? false,
-    pptx: document.getElementById('allowAddPptx')?.checked ?? false
-  };
-  if (!types.web && !types.pdf && !types.docx && !types.xlsx && !types.pptx) {
-    types.web = true;
+  const allowHttp = allowHttpCheckbox ? allowHttpCheckbox.checked : false;
+  try {
+    const value = normalizeUrlRow(input.value, allowHttp);
+    if (!value) return;
+    const types = {
+      web: document.getElementById('allowAddWeb')?.checked ?? true,
+      pdf: document.getElementById('allowAddPdf')?.checked ?? false,
+      docx: document.getElementById('allowAddDocx')?.checked ?? false,
+      xlsx: document.getElementById('allowAddXlsx')?.checked ?? false,
+      pptx: document.getElementById('allowAddPptx')?.checked ?? false
+    };
+    if (!types.web && !types.pdf && !types.docx && !types.xlsx && !types.pptx) {
+      types.web = true;
+    }
+    crawlState.allowRules.push({
+      pattern: value,
+      match: match.value,
+      types,
+      playwright: false,
+      allow_http: allowHttp
+    });
+    input.value = '';
+    if (allowHttpCheckbox) allowHttpCheckbox.checked = false;
+    renderAllowTable();
+    renderRecommendations();
+  } catch (e) {
+    alert(e.message);
   }
-  crawlState.allowRules.push({
-    pattern: value,
-    match: match.value,
-    types,
-    playwright: false
-  });
-  input.value = '';
-  renderAllowTable();
-  renderRecommendations();
 }
 
 async function savePrompts() {

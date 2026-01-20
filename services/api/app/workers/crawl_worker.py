@@ -243,17 +243,48 @@ def _capture_url(url: str, allow_http: bool = False) -> List[str]:
     return links
 
 
+def _get_allow_http_for_url(url: str, config: Dict) -> bool:
+    """Determine if HTTP is allowed for a given URL based on allow_rules or seed_urls config."""
+    # Check seed_urls first
+    seed_urls = config.get("seed_urls", [])
+    for seed in seed_urls:
+        if isinstance(seed, dict):
+            seed_url = seed.get("url", "")
+            if url == seed_url or url.startswith(seed_url):
+                return seed.get("allow_http", False)
+        elif isinstance(seed, str) and (url == seed or url.startswith(seed)):
+            return False  # Default to not allowing HTTP for string seeds
+
+    # Check allow_rules
+    allow_rules = config.get("allow_rules", [])
+    for rule in allow_rules:
+        if isinstance(rule, dict):
+            pattern = rule.get("pattern", "")
+            match_type = rule.get("match", "prefix")
+            if match_type == "exact" and url == pattern:
+                return rule.get("allow_http", False)
+            elif match_type != "exact" and pattern and url.startswith(pattern):
+                return rule.get("allow_http", False)
+
+    # Default to not allowing HTTP
+    return False
+
+
 def run_crawl_job(log, job_id: str = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     allow_block = _load_allow_block()
     crawler_config = _load_crawler_config()
     max_depth = crawler_config.get("max_depth", 0)
-    # Support both force_https and allow_http for backward compatibility
-    if "force_https" in allow_block:
-        allow_http = not allow_block["force_https"]
-    else:
-        allow_http = allow_block.get("allow_http", False)
-    seeds = allow_block.get("seed_urls", [])
+
+    # Extract seeds and normalize to URL strings
+    raw_seeds = allow_block.get("seed_urls", [])
+    seeds = []
+    for seed in raw_seeds:
+        if isinstance(seed, dict):
+            seeds.append(seed.get("url", ""))
+        else:
+            seeds.append(seed)
+    seeds = [s for s in seeds if s]  # Filter out empty strings
 
     # Initialize metrics tracking
     metrics = {
@@ -280,8 +311,12 @@ def run_crawl_job(log, job_id: str = None) -> None:
     }
 
     log(f"Starting crawl job with {len(seeds)} seed(s)")
-    log(f"Force HTTPS: {not allow_http}")
-    _append_candidates(seeds, "seed", 0, max_depth, allow_http)
+    log("Using per-row HTTP/HTTPS configuration")
+
+    # Append candidates for each seed with its individual allow_http setting
+    for seed_url in seeds:
+        allow_http = _get_allow_http_for_url(seed_url, allow_block)
+        _append_candidates([seed_url], "seed", 0, max_depth, allow_http)
     if not CANDIDATE_PATH.exists():
         log("No candidates to process.")
         _save_job_summary(job_id, metrics)
@@ -315,8 +350,10 @@ def run_crawl_job(log, job_id: str = None) -> None:
         log(f"Crawling {url} (depth {depth})")
         metrics["crawled"] += 1
         try:
-            links = _capture_url(url, allow_http)
-            _append_candidates(links, url, depth + 1, max_depth, allow_http)
+            # Determine allow_http flag for this specific URL
+            url_allow_http = _get_allow_http_for_url(url, allow_block)
+            links = _capture_url(url, url_allow_http)
+            _append_candidates(links, url, depth + 1, max_depth, url_allow_http)
             metrics["captured"] += 1
             metrics["artifacts_written"] += 1
             log(f"Captured {url} with {len(links)} link(s)")
