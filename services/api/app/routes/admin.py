@@ -1,6 +1,8 @@
 import asyncio
+import json
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List
+from urllib.parse import urlparse
 
 import yaml
 from fastapi import APIRouter, HTTPException
@@ -17,6 +19,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 SECRETS_PATH = Path("/app/secrets/admin_tokens")
 CONFIG_DIR = Path("/app/config")
+CANDIDATES_PATH = Path("/app/data/candidates/candidates.jsonl")
 
 
 def _load_tokens() -> List[str]:
@@ -53,6 +56,67 @@ async def update_config(name: str, payload: Dict[str, Any]) -> Dict[str, str]:
     path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     refresh_config(name)
     return {"status": "ok"}
+
+
+@router.get("/candidates/recommendations")
+async def candidate_recommendations() -> Dict[str, List[Dict[str, Any]]]:
+    if not CANDIDATES_PATH.exists():
+        return {"items": []}
+    counts: Dict[str, Dict[str, Any]] = {}
+    for line in CANDIDATES_PATH.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        url = entry.get("url")
+        if not url:
+            continue
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            continue
+        path_parts = [part for part in parsed.path.split("/") if part]
+        if path_parts:
+            suggested_url = f"{parsed.scheme}://{parsed.netloc}/{path_parts[0]}/"
+        else:
+            suggested_url = f"{parsed.scheme}://{parsed.netloc}/"
+        seen_types = {
+            "web": True,
+            "pdf": False,
+            "docx": False,
+            "xlsx": False,
+            "pptx": False,
+        }
+        lower_url = url.lower()
+        if lower_url.endswith(".pdf"):
+            seen_types = {**seen_types, "web": False, "pdf": True}
+        elif lower_url.endswith(".docx"):
+            seen_types = {**seen_types, "web": False, "docx": True}
+        elif lower_url.endswith(".xlsx"):
+            seen_types = {**seen_types, "web": False, "xlsx": True}
+        elif lower_url.endswith(".pptx"):
+            seen_types = {**seen_types, "web": False, "pptx": True}
+        entry_key = suggested_url
+        if entry_key not in counts:
+            counts[entry_key] = {
+                "suggested_url": suggested_url,
+                "host": parsed.netloc,
+                "count": 0,
+                "seen_types": {
+                    "web": False,
+                    "pdf": False,
+                    "docx": False,
+                    "xlsx": False,
+                    "pptx": False,
+                },
+            }
+        counts[entry_key]["count"] += 1
+        for key, value in seen_types.items():
+            if value:
+                counts[entry_key]["seen_types"][key] = True
+    items = sorted(counts.values(), key=lambda item: item["count"], reverse=True)[:50]
+    return {"items": items}
 
 
 @router.post("/crawl")

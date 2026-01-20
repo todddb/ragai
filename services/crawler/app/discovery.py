@@ -30,6 +30,20 @@ def is_allowed(url: str, config: Dict[str, List[str]]) -> bool:
     for blocked in config.get("blocked_paths", []):
         if path.startswith(blocked):
             return False
+    allow_rules = config.get("allow_rules", [])
+    if allow_rules:
+        for rule in allow_rules:
+            if isinstance(rule, str):
+                pattern = rule
+                match_type = "prefix"
+            else:
+                pattern = rule.get("pattern", "")
+                match_type = rule.get("match", "prefix")
+            if match_type == "exact" and url == pattern:
+                return True
+            if match_type != "exact" and pattern and url.startswith(pattern):
+                return True
+        return False
     allowed_domains = config.get("allowed_domains", [])
     if allowed_domains and host not in allowed_domains:
         return False
