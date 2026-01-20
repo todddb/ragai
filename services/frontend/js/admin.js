@@ -8,6 +8,7 @@ const crawlState = {
   allowRules: []
 };
 let allowRecommendations = [];
+let recommendationsExpanded = false;
 const editState = {
   seed: null,
   blocked: null,
@@ -297,12 +298,30 @@ function renderAllowTable() {
   });
 }
 
+function isUrlAlreadyAllowed(url) {
+  return crawlState.allowRules.some((rule) => {
+    if (rule.match === 'exact') {
+      return rule.pattern === url;
+    } else {
+      return url.startsWith(rule.pattern);
+    }
+  });
+}
+
 function renderRecommendations() {
   const list = document.getElementById('allowRecommendations');
+  const expandBtn = document.getElementById('expandRecommendations');
   if (!list) return;
   list.innerHTML = '';
-  const existing = new Set(crawlState.allowRules.map((rule) => rule.pattern));
-  allowRecommendations.forEach((rec) => {
+
+  const filteredRecommendations = allowRecommendations.filter((rec) => {
+    return !isUrlAlreadyAllowed(rec.suggested_url);
+  });
+
+  const displayLimit = recommendationsExpanded ? filteredRecommendations.length : 3;
+  const displayedRecommendations = filteredRecommendations.slice(0, displayLimit);
+
+  displayedRecommendations.forEach((rec) => {
     const row = document.createElement('div');
     row.className = 'rec-row';
     const meta = document.createElement('div');
@@ -315,29 +334,33 @@ function renderRecommendations() {
     meta.append(text, badge);
     const addButton = document.createElement('button');
     addButton.className = 'btn btn-small';
-    if (existing.has(rec.suggested_url)) {
-      addButton.textContent = 'Added';
-      addButton.disabled = true;
-    } else {
-      addButton.textContent = '+ Add';
-      addButton.addEventListener('click', () => {
-        const types = normalizeTypes(rec.seen_types);
-        if (!types.web && !types.pdf && !types.docx && !types.xlsx && !types.pptx) {
-          types.web = true;
-        }
-        crawlState.allowRules.push({
-          pattern: rec.suggested_url,
-          match: 'prefix',
-          types,
-          playwright: false
-        });
-        renderAllowTable();
-        renderRecommendations();
+    addButton.textContent = '+ Add';
+    addButton.addEventListener('click', () => {
+      const types = normalizeTypes(rec.seen_types);
+      if (!types.web && !types.pdf && !types.docx && !types.xlsx && !types.pptx) {
+        types.web = true;
+      }
+      crawlState.allowRules.push({
+        pattern: rec.suggested_url,
+        match: 'prefix',
+        types,
+        playwright: false
       });
-    }
+      renderAllowTable();
+      renderRecommendations();
+    });
     row.append(meta, addButton);
     list.appendChild(row);
   });
+
+  if (expandBtn) {
+    if (filteredRecommendations.length > 3) {
+      expandBtn.style.display = 'block';
+      expandBtn.textContent = recommendationsExpanded ? 'Show Less' : `Show ${filteredRecommendations.length - 3} More`;
+    } else {
+      expandBtn.style.display = 'none';
+    }
+  }
 }
 
 function renderCrawlUi() {
@@ -732,6 +755,11 @@ document.getElementById('saveCrawlBtn')?.addEventListener('click', saveCrawlConf
 document.getElementById('seedAddBtn')?.addEventListener('click', addSeedFromInput);
 document.getElementById('blockedAddBtn')?.addEventListener('click', addBlockedFromInput);
 document.getElementById('allowAddBtn')?.addEventListener('click', addAllowFromInput);
+
+document.getElementById('expandRecommendations')?.addEventListener('click', () => {
+  recommendationsExpanded = !recommendationsExpanded;
+  renderRecommendations();
+});
 
 document.getElementById('seedAddInput')?.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
