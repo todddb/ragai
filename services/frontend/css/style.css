@@ -42,6 +42,13 @@ body.page-settings {
   flex-direction: column;
 }
 
+body.page-chat main {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+}
+
 header {
   display: flex;
   align-items: center;
@@ -186,26 +193,26 @@ main {
   background: var(--bg-ai-message);
 }
 
-.message-bubble.markdown-body {
+.message-bubble .markdown-body {
   white-space: pre-wrap;
   line-height: 1.5;
 }
 
-.message-bubble.markdown-body p {
+.message-bubble .markdown-body p {
   margin: 0 0 var(--spacing-sm) 0;
 }
 
-.message-bubble.markdown-body p:last-child {
+.message-bubble .markdown-body p:last-child {
   margin-bottom: 0;
 }
 
-.message-bubble.markdown-body ul,
-.message-bubble.markdown-body ol {
+.message-bubble .markdown-body ul,
+.message-bubble .markdown-body ol {
   padding-left: 1.5rem;
   margin: 0 0 var(--spacing-sm) 0;
 }
 
-.message-bubble.markdown-body pre {
+.message-bubble .markdown-body pre {
   background: #0f172a;
   color: #e2e8f0;
   padding: var(--spacing-sm);
@@ -214,12 +221,12 @@ main {
   margin: var(--spacing-sm) 0;
 }
 
-.message-bubble.markdown-body code {
+.message-bubble .markdown-body code {
   font-family: "Fira Code", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   font-size: 0.85rem;
 }
 
-.message-bubble.markdown-body pre code {
+.message-bubble .markdown-body pre code {
   background: transparent;
   color: inherit;
   font-size: 0.85rem;
@@ -354,6 +361,13 @@ main {
   font-size: 0.75rem;
   color: var(--text-secondary);
   margin-top: var(--spacing-xs);
+}
+
+.assistant-status {
+  font-style: italic;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: var(--spacing-xs);
 }
 
 .status-text {
