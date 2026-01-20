@@ -1,8 +1,6 @@
 import hashlib
-import io
 import json
 import logging
-import sqlite3
 import time
 from datetime import datetime
 from pathlib import Path
@@ -12,16 +10,18 @@ from urllib.parse import urlparse
 import tiktoken
 import yaml
 
-from app.discovery import append_candidates
-from app.fetch import fetch_html_playwright, fetch_resource_httpx
-from app.parse import parse_by_type
+from app.discovery import append_candidates, is_allowed, load_allow_block
+from app.fetch import fetch_html_playwright
+from app.fetch_redirect import fetch_resource_httpx_redirect_safe
+from app.parsers.router import parse_by_type
+from app.structured_store.sqlite_store import SQLiteStructuredStore
 from app.utils.url import canonicalize_url, doc_id_for_url
 
 CONFIG_PATH = Path("/app/config/crawler.yml")
 INGEST_CONFIG_PATH = Path("/app/config/ingest.yml")
 
 ARTIFACT_DIR = Path("/app/data/artifacts")
-STRUCTURED_DB_PATH = Path("/app/data/structured/structured.db")
+STRUCTURED_DB_PATH = Path("/app/data/sqlite/structured.db")
 
 
 def _load_config(path: Path) -> Dict:
@@ -54,72 +54,22 @@ def _is_html_content_type(content_type: str) -> bool:
     return normalized in {"text/html", "application/xhtml+xml"}
 
 
-def _init_structured_db(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS xlsx_sheets (
-            doc_id TEXT,
-            sheet_name TEXT,
-            sheet_index INTEGER,
-            source_url TEXT,
-            ingested_at TEXT,
-            PRIMARY KEY (doc_id, sheet_name)
-        )
-        """
+def _write_chunks(artifact_path: Path, doc_id: str, text: str, chunking: Dict) -> None:
+    chunks = _chunk_text(
+        text,
+        size=chunking.get("chunk_size", 512),
+        overlap=chunking.get("chunk_overlap", 128),
     )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS xlsx_cells (
-            doc_id TEXT,
-            sheet_name TEXT,
-            row INTEGER,
-            column INTEGER,
-            value TEXT
-        )
-        """
-    )
-
-
-def _maybe_ingest_xlsx(
-    doc_id: str,
-    content_bytes: bytes,
-    source_url: str,
-    parser_name: str,
-    db_path: Path | None = None,
-) -> None:
-    if parser_name != "xlsx":
-        return
-    try:
-        import openpyxl  # type: ignore
-    except Exception as exc:
-        raise RuntimeError("Missing dependency: openpyxl (pip install openpyxl)") from exc
-    target_path = db_path or STRUCTURED_DB_PATH
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    workbook = openpyxl.load_workbook(filename=io.BytesIO(content_bytes), data_only=True)
-    with sqlite3.connect(target_path) as conn:
-        _init_structured_db(conn)
-        ingested_at = datetime.utcnow().isoformat() + "Z"
-        for index, sheet in enumerate(workbook.worksheets):
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO xlsx_sheets
-                (doc_id, sheet_name, sheet_index, source_url, ingested_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (doc_id, sheet.title, index, source_url, ingested_at),
-            )
-            for row_index, row in enumerate(sheet.iter_rows(values_only=True), start=1):
-                for col_index, value in enumerate(row, start=1):
-                    if value is None:
-                        continue
-                    conn.execute(
-                        """
-                        INSERT INTO xlsx_cells (doc_id, sheet_name, row, column, value)
-                        VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (doc_id, sheet.title, row_index, col_index, str(value)),
-                    )
-        conn.commit()
+    chunks_path = artifact_path / "chunks.jsonl"
+    with chunks_path.open("w", encoding="utf-8") as handle:
+        for index, chunk_text in enumerate(chunks):
+            record = {
+                "chunk_id": f"{doc_id}_{index}",
+                "doc_id": doc_id,
+                "chunk_index": index,
+                "text": chunk_text,
+            }
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 def capture_url(url: str) -> Tuple[str, List[str]]:
@@ -137,12 +87,61 @@ def capture_url(url: str) -> Tuple[str, List[str]]:
     hostname = (urlparse(canonical).hostname or "").lower()
     use_domains = [domain.lower() for domain in playwright_config.get("use_for_domains", [])]
     use_playwright = bool(playwright_config.get("enabled")) and hostname in use_domains
+    allow_block_cfg = load_allow_block()
     logger = logging.getLogger(__name__)
     logger.info("FETCH=httpx url=%s", canonical)
-    content_bytes, content_type, final_url, status_code = fetch_resource_httpx(
-        canonical, headers=headers, timeout=timeout
+    fetch_result = fetch_resource_httpx_redirect_safe(
+        canonical,
+        headers=headers,
+        timeout=timeout,
+        allow_block_cfg=allow_block_cfg,
+        is_allowed_fn=is_allowed,
     )
-    fetch_url = final_url or canonical
+    fetch_url = fetch_result.final_url or canonical
+    doc_id = doc_id_for_url(fetch_url)
+    artifact_path = ARTIFACT_DIR / doc_id
+    artifact_path.mkdir(parents=True, exist_ok=True)
+    markdown_path = artifact_path / "content.md"
+    ingest_chunking = ingest_config.get("chunking", {})
+
+    if not fetch_result.ok:
+        if fetch_result.status == "blocked_redirect":
+            logger.info(
+                "SKIP_BLOCKED_REDIRECT url=%s blocked_to=%s", canonical, fetch_result.blocked_to
+            )
+            markdown = f"Skipped redirect to blocked URL: {fetch_result.blocked_to}"
+        elif fetch_result.status == "not_found":
+            logger.info("SKIP_NOT_FOUND url=%s", canonical)
+            markdown = "Skipped: not found"
+        else:
+            logger.info("SKIP_HTTP_ERROR url=%s status_code=%s", canonical, fetch_result.status_code)
+            markdown = "Skipped: http error"
+        markdown_path.write_text(markdown, encoding="utf-8")
+        artifact = {
+            "doc_id": doc_id,
+            "url": canonical,
+            "canonical_url": canonical,
+            "final_url": fetch_url,
+            "content_type": fetch_result.content_type or "",
+            "parser": "",
+            "status": fetch_result.status,
+            "status_code": fetch_result.status_code,
+            "markdown_path": "content.md",
+            "meta": {"redirect_chain": fetch_result.redirect_chain},
+            "content_hash": _content_hash(markdown),
+            "fetched_at": datetime.utcnow().isoformat() + "Z",
+            "title": "",
+            "text": "",
+        }
+        (artifact_path / "artifact.json").write_text(
+            json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        _write_chunks(artifact_path, doc_id, "", ingest_chunking)
+        return canonical, []
+
+    content_bytes = fetch_result.content_bytes
+    content_type = fetch_result.content_type
+    status_code = fetch_result.status_code
     if use_playwright and _is_html_content_type(content_type):
         storage_state_path = playwright_config.get("storage_state_path")
         if not storage_state_path:
@@ -163,12 +162,7 @@ def capture_url(url: str) -> Tuple[str, List[str]]:
     text = parsed_doc.text_for_chunking
     links = parsed_doc.links if parser_name == "html" else []
 
-    doc_id = doc_id_for_url(fetch_url)
     content_hash = _content_hash(text)
-    artifact_path = ARTIFACT_DIR / doc_id
-    artifact_path.mkdir(parents=True, exist_ok=True)
-
-    markdown_path = artifact_path / "content.md"
     markdown_path.write_text(parsed_doc.markdown, encoding="utf-8")
 
     artifact = {
@@ -178,6 +172,7 @@ def capture_url(url: str) -> Tuple[str, List[str]]:
         "final_url": fetch_url,
         "content_type": content_type,
         "parser": parser_name,
+        "status": "captured",
         "status_code": status_code,
         "markdown_path": "content.md",
         "meta": parsed_doc.meta,
@@ -186,28 +181,24 @@ def capture_url(url: str) -> Tuple[str, List[str]]:
         "title": title,
         "text": text,
     }
+    structured_cfg = crawler_config.get("structured_store", {})
+    if parser_name == "xlsx" and structured_cfg.get("enabled", False):
+        sqlite_path = Path(structured_cfg.get("sqlite_path", str(STRUCTURED_DB_PATH)))
+        xlsx_ingest_cfg = structured_cfg.get("xlsx_ingest", {})
+        store = SQLiteStructuredStore(sqlite_path)
+        ingest_meta = store.ingest_xlsx_to_meta(
+            doc_id=doc_id,
+            source_url=fetch_url,
+            content_bytes=content_bytes,
+            max_cells=xlsx_ingest_cfg.get("max_cells", 50000),
+            batch_size=xlsx_ingest_cfg.get("batch_size", 2000),
+        )
+        artifact["meta"] = {**artifact["meta"], "xlsx_ingest": ingest_meta}
+
     (artifact_path / "artifact.json").write_text(
         json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-
-    chunking = ingest_config.get("chunking", {})
-    chunks = _chunk_text(
-        text,
-        size=chunking.get("chunk_size", 512),
-        overlap=chunking.get("chunk_overlap", 128),
-    )
-    chunks_path = artifact_path / "chunks.jsonl"
-    with chunks_path.open("w", encoding="utf-8") as handle:
-        for index, chunk_text in enumerate(chunks):
-            record = {
-                "chunk_id": f"{doc_id}_{index}",
-                "doc_id": doc_id,
-                "chunk_index": index,
-                "text": chunk_text,
-            }
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-    _maybe_ingest_xlsx(doc_id, content_bytes, fetch_url, parser_name)
+    _write_chunks(artifact_path, doc_id, text, ingest_chunking)
 
     return canonical, links
 
