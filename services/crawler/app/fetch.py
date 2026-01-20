@@ -1,8 +1,17 @@
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Tuple
 
 import httpx
 from playwright.sync_api import sync_playwright
+
+
+def fetch_resource_httpx(
+    url: str, headers: Dict[str, str], timeout: float
+) -> Tuple[bytes, str, str, int]:
+    response = httpx.get(url, headers=headers, timeout=timeout, follow_redirects=True)
+    response.raise_for_status()
+    content_type = response.headers.get("content-type", "application/octet-stream")
+    return response.content, content_type, str(response.url), response.status_code
 
 
 def fetch_html_httpx(url: str, headers: Dict[str, str], timeout: float) -> str:
