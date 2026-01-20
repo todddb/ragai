@@ -22,6 +22,8 @@ async function downloadResponse(response, fallbackName) {
 function buildConversationCard(conv) {
   const wrapper = document.createElement('div');
   wrapper.className = 'conversation-card';
+  wrapper.setAttribute('role', 'button');
+  wrapper.setAttribute('tabindex', '0');
 
   const details = document.createElement('div');
   details.className = 'conversation-details';
@@ -35,7 +37,7 @@ function buildConversationCard(conv) {
   meta.textContent = `Updated ${conv.updated_at}`;
 
   const renameForm = document.createElement('div');
-  renameForm.className = 'conversation-actions';
+  renameForm.className = 'conversation-rename';
   renameForm.style.display = 'none';
 
   const renameInput = document.createElement('input');
@@ -61,32 +63,45 @@ function buildConversationCard(conv) {
   const actions = document.createElement('div');
   actions.className = 'conversation-actions';
 
-  const openButton = document.createElement('button');
-  openButton.className = 'btn btn-primary';
-  openButton.textContent = 'Open';
-  openButton.addEventListener('click', () => {
-    window.location.href = `chat.html?conversation_id=${conv.id}`;
-  });
+  const createActionButton = (label, svgPath) => {
+    const button = document.createElement('button');
+    button.className = 'icon-btn';
+    button.type = 'button';
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
+    button.innerHTML = `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="${svgPath}"></path>
+      </svg>
+    `;
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+    });
+    return button;
+  };
 
-  const renameButton = document.createElement('button');
-  renameButton.className = 'btn';
-  renameButton.textContent = 'Rename';
+  const renameButton = createActionButton(
+    'Edit',
+    'M5 17.25V19h1.75L16.81 8.94l-1.75-1.75L5 17.25zm12.71-7.04a1 1 0 0 0 0-1.41l-2.5-2.5a1 1 0 0 0-1.41 0l-1.13 1.13 3.91 3.91 1.13-1.13z'
+  );
   renameButton.addEventListener('click', () => {
     renameForm.style.display = 'flex';
     renameInput.focus();
   });
 
-  const deleteButton = document.createElement('button');
-  deleteButton.className = 'btn';
-  deleteButton.textContent = 'Delete';
+  const deleteButton = createActionButton(
+    'Delete',
+    'M6 7h12v2H6V7zm2 3h8l-1 9H9l-1-9zm3-5h2l1 1H10l1-1z'
+  );
   deleteButton.addEventListener('click', async () => {
     await fetch(`${API_BASE}/api/chat/${conv.id}`, { method: 'DELETE' });
     loadConversations();
   });
 
-  const exportButton = document.createElement('button');
-  exportButton.className = 'btn';
-  exportButton.textContent = 'Export';
+  const exportButton = createActionButton(
+    'Export',
+    'M12 3l4 4h-3v7h-2V7H8l4-4zm-7 14h14v2H5v-2z'
+  );
   exportButton.addEventListener('click', async () => {
     const response = await fetch(`${API_BASE}/api/chat/${conv.id}/export`);
     if (!response.ok) return;
@@ -110,13 +125,31 @@ function buildConversationCard(conv) {
     renameInput.value = conv.title || '';
   });
 
-  actions.appendChild(openButton);
   actions.appendChild(renameButton);
   actions.appendChild(deleteButton);
   actions.appendChild(exportButton);
 
   wrapper.appendChild(details);
   wrapper.appendChild(actions);
+
+  const openConversation = () => {
+    window.location.href = `chat.html?conversation_id=${conv.id}`;
+  };
+
+  wrapper.addEventListener('click', openConversation);
+  wrapper.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      openConversation();
+    }
+  });
+
+  renameForm.addEventListener('click', (event) => {
+    event.stopPropagation();
+  });
+  actions.addEventListener('click', (event) => {
+    event.stopPropagation();
+  });
 
   return wrapper;
 }
