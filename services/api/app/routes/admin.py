@@ -212,11 +212,25 @@ async def clear_vectors() -> Dict[str, str]:
     if not collection or not qdrant_host:
         raise HTTPException(status_code=400, detail="Missing qdrant configuration")
     client = QdrantClient(url=qdrant_host)
-    collections = client.get_collections().collections
+    try:
+        collections = client.get_collections().collections
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error connecting to Qdrant: {e}")
+
     vector_size = None
     if any(col.name == collection for col in collections):
-        info = client.get_collection(collection)
-        vector_size = info.config.params.vectors.size
+        try:
+            info = client.get_collection(collection)
+            vector_size = info.config.params.vectors.size
+        except AttributeError:
+            # Handle case where config structure doesn't match expected schema
+            print(f"Warning: Could not get vector size for collection '{collection}' due to schema mismatch")
+        except Exception as e:
+            # Handle pydantic validation errors
+            if "validation" in str(e).lower() or "extra" in str(e).lower():
+                print(f"Warning: Qdrant config validation error (server schema mismatch): {e}")
+            else:
+                raise HTTPException(status_code=500, detail=f"Error getting collection info: {e}")
         client.delete_collection(collection_name=collection)
     if vector_size is None:
         if not embedding_model or not ollama_host:

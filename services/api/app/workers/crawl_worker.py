@@ -248,23 +248,39 @@ def run_crawl_job(log, job_id: str = None) -> None:
     allow_block = _load_allow_block()
     crawler_config = _load_crawler_config()
     max_depth = crawler_config.get("max_depth", 0)
-    allow_http = allow_block.get("allow_http", False)
+    # Support both force_https and allow_http for backward compatibility
+    if "force_https" in allow_block:
+        allow_http = not allow_block["force_https"]
+    else:
+        allow_http = allow_block.get("allow_http", False)
     seeds = allow_block.get("seed_urls", [])
 
     # Initialize metrics tracking
     metrics = {
+        "total_seeds": len(seeds),
         "total_candidates": 0,
         "crawled": 0,
         "captured": 0,
+        "artifacts_written": 0,
         "errors": 0,
-        "skipped_already_processed": 0,
-        "skipped_depth": 0,
-        "skipped_not_allowed": 0,
+        "skipped": {
+            "already_processed": 0,
+            "depth_exceeded": 0,
+            "not_allowed": 0,
+            "auth_required": 0,
+            "non_html": 0
+        },
+        "errors_by_class": {
+            "4xx": 0,
+            "5xx": 0,
+            "network_timeout": 0,
+            "other": 0
+        },
         "error_details": []
     }
 
     log(f"Starting crawl job with {len(seeds)} seed(s)")
-    log(f"Allow HTTP: {allow_http}")
+    log(f"Force HTTPS: {not allow_http}")
     _append_candidates(seeds, "seed", 0, max_depth, allow_http)
     if not CANDIDATE_PATH.exists():
         log("No candidates to process.")
@@ -284,15 +300,15 @@ def run_crawl_job(log, job_id: str = None) -> None:
         if not url:
             continue
         if url in processed:
-            metrics["skipped_already_processed"] += 1
+            metrics["skipped"]["already_processed"] += 1
             continue
         if depth > max_depth:
-            metrics["skipped_depth"] += 1
+            metrics["skipped"]["depth_exceeded"] += 1
             processed.add(url)
             _save_processed(processed)
             continue
         if not _is_allowed(url, allow_block):
-            metrics["skipped_not_allowed"] += 1
+            metrics["skipped"]["not_allowed"] += 1
             processed.add(url)
             _save_processed(processed)
             continue
@@ -302,11 +318,52 @@ def run_crawl_job(log, job_id: str = None) -> None:
             links = _capture_url(url, allow_http)
             _append_candidates(links, url, depth + 1, max_depth, allow_http)
             metrics["captured"] += 1
+            metrics["artifacts_written"] += 1
             log(f"Captured {url} with {len(links)} link(s)")
+        except httpx.HTTPStatusError as exc:
+            metrics["errors"] += 1
+            status_code = exc.response.status_code
+
+            # Check if this is an auth redirect
+            if status_code in [301, 302, 303, 307, 308]:
+                location = exc.response.headers.get("location", "")
+                auth_hosts = ["auth.brightspot.byu.edu", "y.byu.edu/logout", "cas.byu.edu", "login.byu.edu"]
+                if any(host in location.lower() for host in auth_hosts):
+                    metrics["skipped"]["auth_required"] += 1
+                    error_msg = f"{url}: Auth required (redirect to {location})"
+                else:
+                    error_msg = f"{url}: HTTP {status_code} redirect"
+            elif 400 <= status_code < 500:
+                metrics["errors_by_class"]["4xx"] += 1
+                error_msg = f"{url}: HTTP {status_code}"
+            elif 500 <= status_code < 600:
+                metrics["errors_by_class"]["5xx"] += 1
+                error_msg = f"{url}: HTTP {status_code}"
+            else:
+                metrics["errors_by_class"]["other"] += 1
+                error_msg = f"{url}: HTTP {status_code}"
+
+            if len(metrics["error_details"]) < 10:
+                metrics["error_details"].append(error_msg)
+            log(f"Error capturing {url}: {exc}")
+        except (httpx.TimeoutException, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as exc:
+            metrics["errors"] += 1
+            metrics["errors_by_class"]["network_timeout"] += 1
+            error_msg = f"{url}: Timeout"
+            if len(metrics["error_details"]) < 10:
+                metrics["error_details"].append(error_msg)
+            log(f"Error capturing {url}: {exc}")
         except Exception as exc:
             metrics["errors"] += 1
-            error_msg = f"{url}: {str(exc)}"
-            if len(metrics["error_details"]) < 10:  # Keep only first 10 errors
+            # Check if it's a non-HTML content type error
+            error_str = str(exc).lower()
+            if "content-type" in error_str or "not html" in error_str:
+                metrics["skipped"]["non_html"] += 1
+                error_msg = f"{url}: Non-HTML content"
+            else:
+                metrics["errors_by_class"]["other"] += 1
+                error_msg = f"{url}: {str(exc)}"
+            if len(metrics["error_details"]) < 10:
                 metrics["error_details"].append(error_msg)
             log(f"Error capturing {url}: {exc}")
         processed.add(url)
@@ -318,13 +375,25 @@ def run_crawl_job(log, job_id: str = None) -> None:
     # Log summary
     log("=" * 60)
     log("Crawl Summary:")
-    log(f"  Total candidates: {metrics['total_candidates']}")
-    log(f"  Crawled: {metrics['crawled']}")
+    log(f"  Total seeds: {metrics['total_seeds']}")
+    log(f"  Candidates loaded: {metrics['total_candidates']}")
+    log(f"  URLs crawled: {metrics['crawled']}")
     log(f"  Successfully captured: {metrics['captured']}")
-    log(f"  Errors: {metrics['errors']}")
-    log(f"  Skipped (already processed): {metrics['skipped_already_processed']}")
-    log(f"  Skipped (depth exceeded): {metrics['skipped_depth']}")
-    log(f"  Skipped (not allowed): {metrics['skipped_not_allowed']}")
+    log(f"  Artifacts written: {metrics['artifacts_written']}")
+    log("")
+    log("  Skipped:")
+    log(f"    Already processed: {metrics['skipped']['already_processed']}")
+    log(f"    Depth exceeded: {metrics['skipped']['depth_exceeded']}")
+    log(f"    Not allowed: {metrics['skipped']['not_allowed']}")
+    log(f"    Auth required: {metrics['skipped']['auth_required']}")
+    log(f"    Non-HTML: {metrics['skipped']['non_html']}")
+    log("")
+    log(f"  Total errors: {metrics['errors']}")
+    log("  Errors by class:")
+    log(f"    4xx: {metrics['errors_by_class']['4xx']}")
+    log(f"    5xx: {metrics['errors_by_class']['5xx']}")
+    log(f"    Network/Timeout: {metrics['errors_by_class']['network_timeout']}")
+    log(f"    Other: {metrics['errors_by_class']['other']}")
     log("=" * 60)
     log("Crawl job complete")
 

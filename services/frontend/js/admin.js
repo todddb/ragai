@@ -6,7 +6,7 @@ const crawlState = {
   seeds: [],
   blocked: [],
   allowRules: [],
-  allowHttp: false
+  forceHttps: true
 };
 let allowRecommendations = [];
 let recommendationsExpanded = false;
@@ -80,8 +80,8 @@ function normalizeUrlInput(input) {
     url = 'https://' + url;
   }
 
-  // If "Allow HTTP" is unchecked, convert http:// to https://
-  if (!crawlState.allowHttp && url.match(/^http:\/\//i)) {
+  // If "Force HTTPS" is checked, convert http:// to https://
+  if (crawlState.forceHttps && url.match(/^http:\/\//i)) {
     url = url.replace(/^http:\/\//i, 'https://');
   }
 
@@ -511,7 +511,14 @@ async function loadConfigs() {
   const allow = await fetch(`${API_BASE}/api/admin/config/allow_block`).then((r) => r.json());
   crawlState.seeds = allow.seed_urls || [];
   crawlState.blocked = allow.blocked_domains || [];
-  crawlState.allowHttp = Boolean(allow.allow_http);
+  // Support both old allow_http and new force_https for backward compatibility
+  if (allow.force_https !== undefined) {
+    crawlState.forceHttps = Boolean(allow.force_https);
+  } else if (allow.allow_http !== undefined) {
+    crawlState.forceHttps = !Boolean(allow.allow_http);
+  } else {
+    crawlState.forceHttps = true; // Default to forcing HTTPS
+  }
   if (Array.isArray(allow.allow_rules) && allow.allow_rules.length > 0) {
     crawlState.allowRules = allow.allow_rules.map((rule) => normalizeAllowRule(rule));
   } else {
@@ -524,9 +531,9 @@ async function loadConfigs() {
       })
     );
   }
-  const allowHttpCheckbox = document.getElementById('allowHttpCheckbox');
-  if (allowHttpCheckbox) {
-    allowHttpCheckbox.checked = crawlState.allowHttp;
+  const forceHttpsCheckbox = document.getElementById('forceHttpsCheckbox');
+  if (forceHttpsCheckbox) {
+    forceHttpsCheckbox.checked = crawlState.forceHttps;
   }
   editState.seed = null;
   editState.blocked = null;
@@ -566,14 +573,14 @@ async function loadRecommendations() {
 }
 
 async function saveCrawlConfig() {
-  const allowHttpCheckbox = document.getElementById('allowHttpCheckbox');
-  if (allowHttpCheckbox) {
-    crawlState.allowHttp = allowHttpCheckbox.checked;
+  const forceHttpsCheckbox = document.getElementById('forceHttpsCheckbox');
+  if (forceHttpsCheckbox) {
+    crawlState.forceHttps = forceHttpsCheckbox.checked;
   }
   const allowPayload = {
     seed_urls: crawlState.seeds,
     blocked_domains: crawlState.blocked,
-    allow_http: crawlState.allowHttp,
+    force_https: crawlState.forceHttps,
     allow_rules: crawlState.allowRules.map((rule) => ({
       pattern: rule.pattern,
       match: rule.match || 'prefix',
@@ -717,18 +724,28 @@ async function loadCrawlSummary(jobId) {
     }
     const summary = await response.json();
 
-    const totalSkipped = (summary.skipped_already_processed || 0) +
-                        (summary.skipped_depth || 0) +
-                        (summary.skipped_not_allowed || 0);
+    // Handle both old and new summary formats
+    const skipped = summary.skipped || {};
+    const errorsByClass = summary.errors_by_class || {};
+
+    const totalSkipped = (skipped.already_processed || summary.skipped_already_processed || 0) +
+                        (skipped.depth_exceeded || summary.skipped_depth || 0) +
+                        (skipped.not_allowed || summary.skipped_not_allowed || 0) +
+                        (skipped.auth_required || 0) +
+                        (skipped.non_html || 0);
 
     let html = `
       <div class="info-grid">
         <div>
-          <div class="field-label">Total Candidates</div>
+          <div class="field-label">Total Seeds</div>
+          <div class="info-value">${summary.total_seeds || 0}</div>
+        </div>
+        <div>
+          <div class="field-label">Candidates Loaded</div>
           <div class="info-value">${summary.total_candidates || 0}</div>
         </div>
         <div>
-          <div class="field-label">Crawled</div>
+          <div class="field-label">URLs Crawled</div>
           <div class="info-value">${summary.crawled || 0}</div>
         </div>
         <div>
@@ -736,15 +753,52 @@ async function loadCrawlSummary(jobId) {
           <div class="info-value">${summary.captured || 0}</div>
         </div>
         <div>
-          <div class="field-label">Errors</div>
+          <div class="field-label">Artifacts Written</div>
+          <div class="info-value">${summary.artifacts_written || summary.captured || 0}</div>
+        </div>
+        <div>
+          <div class="field-label">Total Errors</div>
           <div class="info-value">${summary.errors || 0}</div>
         </div>
         <div>
-          <div class="field-label">Skipped</div>
+          <div class="field-label">Total Skipped</div>
           <div class="info-value">${totalSkipped}</div>
         </div>
       </div>
     `;
+
+    // Add detailed skipped breakdown
+    if (totalSkipped > 0) {
+      html += `
+        <div style="margin-top: 12px;">
+          <div class="field-label">Skipped Breakdown:</div>
+          <div style="font-size: 12px; color: #666;">
+            ${skipped.already_processed || summary.skipped_already_processed ? `<div>• Already processed: ${skipped.already_processed || summary.skipped_already_processed}</div>` : ''}
+            ${skipped.depth_exceeded || summary.skipped_depth ? `<div>• Depth exceeded: ${skipped.depth_exceeded || summary.skipped_depth}</div>` : ''}
+            ${skipped.not_allowed || summary.skipped_not_allowed ? `<div>• Not allowed: ${skipped.not_allowed || summary.skipped_not_allowed}</div>` : ''}
+            ${skipped.auth_required ? `<div>• Auth required: ${skipped.auth_required}</div>` : ''}
+            ${skipped.non_html ? `<div>• Non-HTML: ${skipped.non_html}</div>` : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    // Add errors by class
+    const totalErrorsByClass = (errorsByClass['4xx'] || 0) + (errorsByClass['5xx'] || 0) +
+                                (errorsByClass.network_timeout || 0) + (errorsByClass.other || 0);
+    if (totalErrorsByClass > 0) {
+      html += `
+        <div style="margin-top: 12px;">
+          <div class="field-label">Errors by Class:</div>
+          <div style="font-size: 12px; color: #666;">
+            ${errorsByClass['4xx'] ? `<div>• 4xx: ${errorsByClass['4xx']}</div>` : ''}
+            ${errorsByClass['5xx'] ? `<div>• 5xx: ${errorsByClass['5xx']}</div>` : ''}
+            ${errorsByClass.network_timeout ? `<div>• Network/Timeout: ${errorsByClass.network_timeout}</div>` : ''}
+            ${errorsByClass.other ? `<div>• Other: ${errorsByClass.other}</div>` : ''}
+          </div>
+        </div>
+      `;
+    }
 
     if (summary.error_details && summary.error_details.length > 0) {
       html += `
@@ -759,8 +813,24 @@ async function loadCrawlSummary(jobId) {
 
     summaryContent.innerHTML = html;
     summaryPanel.style.display = 'block';
+
+    // Update pill summary at top of logs
+    const pillSummary = document.getElementById('crawlPillSummary');
+    if (pillSummary) {
+      const pillHtml = `
+        <span class="status-pill success">Captured: ${summary.captured || 0}</span>
+        <span class="status-pill ${summary.errors > 0 ? 'error' : 'success'}">Errors: ${summary.errors || 0}</span>
+        <span class="status-pill">Skipped: ${totalSkipped}</span>
+      `;
+      pillSummary.innerHTML = pillHtml;
+      pillSummary.style.display = 'flex';
+    }
   } catch (error) {
     summaryPanel.style.display = 'none';
+    const pillSummary = document.getElementById('crawlPillSummary');
+    if (pillSummary) {
+      pillSummary.style.display = 'none';
+    }
   }
 }
 
@@ -772,6 +842,10 @@ async function triggerJob(type) {
     const summaryPanel = document.getElementById('crawlSummary');
     if (summaryPanel) {
       summaryPanel.style.display = 'none';
+    }
+    const pillSummary = document.getElementById('crawlPillSummary');
+    if (pillSummary) {
+      pillSummary.style.display = 'none';
     }
     streamLog(currentCrawlJobId, 'crawlLog', 'crawl');
   } else {
@@ -849,6 +923,10 @@ async function deleteCurrentLog(jobId, statusTarget, streamKey, logTargetId) {
       const summaryPanel = document.getElementById('crawlSummary');
       if (summaryPanel) {
         summaryPanel.style.display = 'none';
+      }
+      const pillSummary = document.getElementById('crawlPillSummary');
+      if (pillSummary) {
+        pillSummary.style.display = 'none';
       }
     }
     setStatus(statusTarget, 'Deleted');
@@ -1018,8 +1096,10 @@ window.resetAdminSession = () => {
   const ingestLog = document.getElementById('ingestLog');
   const jobLog = document.getElementById('jobLog');
   const summaryPanel = document.getElementById('crawlSummary');
+  const pillSummary = document.getElementById('crawlPillSummary');
   if (crawlLog) crawlLog.textContent = '';
   if (ingestLog) ingestLog.textContent = '';
   if (jobLog) jobLog.textContent = '';
   if (summaryPanel) summaryPanel.style.display = 'none';
+  if (pillSummary) pillSummary.style.display = 'none';
 };
