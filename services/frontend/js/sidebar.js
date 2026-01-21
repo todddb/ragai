@@ -75,6 +75,17 @@ if (sidebar && conversationList) {
     URL.revokeObjectURL(url);
   };
 
+  const formatConversationTitle = (title) => {
+    if (!title) return 'Untitled';
+    // Remove JSON/XML/tool artifacts
+    title = title.replace(/[{}<>]/g, '');
+    // Truncate if too long (max 40 characters)
+    if (title.length > 40) {
+      return title.slice(0, 37) + '...';
+    }
+    return title;
+  };
+
   const updateActiveConversation = () => {
     const activeId = window.getCurrentConversationId ? window.getCurrentConversationId() : null;
     document.querySelectorAll('.conversation-item').forEach((item) => {
@@ -95,7 +106,7 @@ if (sidebar && conversationList) {
     const titleWrap = document.createElement('div');
     const title = document.createElement('div');
     title.className = 'conversation-item-title';
-    title.textContent = conv.title || 'Untitled';
+    title.textContent = formatConversationTitle(conv.title);
 
     const meta = document.createElement('div');
     meta.className = 'conversation-item-meta';
