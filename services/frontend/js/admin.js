@@ -1634,23 +1634,6 @@ document.getElementById('deleteJobLog').addEventListener('click', () => {
   currentJobLogId = null;
 });
 
-document.getElementById('purgeCandidates')?.addEventListener('click', async () => {
-  if (!confirm('Purge all candidates and processed history? This cannot be undone.')) {
-    return;
-  }
-  const statusTarget = 'purgeCandidatesStatus';
-  try {
-    const response = await fetch(`${API_BASE}/api/admin/candidates/purge`, { method: 'POST' });
-    if (response.ok) {
-      setStatus(statusTarget, 'Purged successfully');
-    } else {
-      setStatus(statusTarget, 'Error purging candidates', 'error');
-    }
-  } catch (error) {
-    setStatus(statusTarget, 'Error purging candidates', 'error');
-  }
-});
-
 document.getElementById('addAuthProfileBtn')?.addEventListener('click', () => {
   showAuthProfileEditor();
 });

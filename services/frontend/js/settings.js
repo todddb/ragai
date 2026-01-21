@@ -4,8 +4,6 @@ const ollamaStatus = document.getElementById('ollamaStatus');
 const qdrantStatus = document.getElementById('qdrantStatus');
 const ollamaModel = document.getElementById('ollamaModel');
 const connectionMessage = document.getElementById('connectionMessage');
-const apiUrlInput = document.getElementById('apiUrlInput');
-const saveApiUrlButton = document.getElementById('saveApiUrl');
 const testConnectionButton = document.getElementById('testConnection');
 const toggleUser = document.getElementById('toggleUser');
 const toggleAdmin = document.getElementById('toggleAdmin');
@@ -166,17 +164,6 @@ window.setAdminUnlocked = (value) => {
 };
 
 apiBaseDisplay.textContent = API_BASE;
-apiUrlInput.value = localStorage.getItem('API_URL') || API_BASE;
-
-saveApiUrlButton.addEventListener('click', () => {
-  const value = apiUrlInput.value.trim();
-  if (value) {
-    localStorage.setItem('API_URL', value);
-  } else {
-    localStorage.removeItem('API_URL');
-  }
-  window.location.reload();
-});
 
 testConnectionButton.addEventListener('click', checkConnection);
 
