@@ -4,6 +4,7 @@ let currentJobLogId = null;
 let cachedCrawlerConfig = {};
 let authProfiles = [];
 let authHints = { by_domain: {}, recent: [] };
+let authStatusCache = { results: {}, updatedAt: null };
 const crawlState = {
   seeds: [],
   blocked: [],
@@ -746,6 +747,72 @@ function extractAllowedDomains(rules) {
   return Array.from(domains);
 }
 
+function getAuthStatus(profileName) {
+  return authStatusCache?.results?.[profileName] || null;
+}
+
+function getAuthStatusBadge(status) {
+  if (!status) {
+    return { label: '⚠️ Unknown', className: 'warning' };
+  }
+  if (status.ok) {
+    return { label: '✅ Valid', className: 'success' };
+  }
+  return { label: '❌ Invalid', className: 'error' };
+}
+
+async function loadAuthStatus() {
+  try {
+    const response = await fetch(`${API_BASE}/api/crawl/auth-status`);
+    if (!response.ok) {
+      authStatusCache = { results: {}, updatedAt: null };
+      return;
+    }
+    const payload = await response.json();
+    authStatusCache = { results: payload.results || {}, updatedAt: new Date().toISOString() };
+  } catch (error) {
+    authStatusCache = { results: {}, updatedAt: null };
+  }
+}
+
+async function testAuthProfile(profileName, statusEl, buttonEl) {
+  if (!profileName) return;
+  if (buttonEl) {
+    buttonEl.disabled = true;
+    buttonEl.textContent = 'Testing...';
+  }
+  if (statusEl) {
+    statusEl.textContent = 'Running auth check...';
+    statusEl.style.color = 'var(--text-secondary)';
+  }
+  try {
+    const response = await fetch(`${API_BASE}/api/crawl/test-auth`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile_name: profileName })
+    });
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    const payload = await response.json();
+    authStatusCache = {
+      results: { ...(authStatusCache.results || {}), ...(payload.results || {}) },
+      updatedAt: new Date().toISOString()
+    };
+    renderAuthProfilesList();
+  } catch (error) {
+    if (statusEl) {
+      statusEl.textContent = `Auth check failed: ${error.message}`;
+      statusEl.style.color = 'var(--status-error)';
+    }
+  } finally {
+    if (buttonEl) {
+      buttonEl.disabled = false;
+      buttonEl.textContent = 'Test Auth';
+    }
+  }
+}
+
 function renderAuthProfilesList() {
   const list = document.getElementById('authProfilesList');
   if (!list) return;
@@ -788,7 +855,46 @@ function renderAuthProfilesList() {
     const domains = profile.use_for_domains || [];
     domainsEl.textContent = domains.length > 0 ? `Domains: ${domains.join(', ')}` : 'No auto-apply domains';
 
-    details.append(nameEl, pathEl, domainsEl);
+    const testUrlEl = document.createElement('div');
+    testUrlEl.style.fontSize = '0.75rem';
+    testUrlEl.style.color = 'var(--text-tertiary)';
+    testUrlEl.textContent = profile.test_url ? `Test URL: ${profile.test_url}` : 'Test URL: auto';
+
+    const statusRow = document.createElement('div');
+    statusRow.style.display = 'flex';
+    statusRow.style.flexDirection = 'column';
+    statusRow.style.gap = '4px';
+    statusRow.style.marginTop = '8px';
+
+    const status = getAuthStatus(name);
+    const badgeInfo = getAuthStatusBadge(status);
+    const badge = document.createElement('span');
+    badge.className = `status-pill ${badgeInfo.className}`;
+    badge.textContent = badgeInfo.label;
+    statusRow.appendChild(badge);
+
+    const statusMessage = document.createElement('div');
+    statusMessage.style.fontSize = '0.75rem';
+    statusMessage.style.color = 'var(--text-secondary)';
+    statusRow.appendChild(statusMessage);
+
+    if (status && !status.ok) {
+      const reason = document.createElement('div');
+      reason.style.fontSize = '0.75rem';
+      reason.style.color = 'var(--status-error)';
+      reason.textContent = status.error_reason || 'Auth validation failed';
+      statusRow.appendChild(reason);
+
+      if (status.final_url) {
+        const finalUrl = document.createElement('div');
+        finalUrl.style.fontSize = '0.75rem';
+        finalUrl.style.color = 'var(--text-secondary)';
+        finalUrl.textContent = `Final URL: ${status.final_url}`;
+        statusRow.appendChild(finalUrl);
+      }
+    }
+
+    details.append(nameEl, pathEl, domainsEl, testUrlEl, statusRow);
 
     const actions = document.createElement('div');
     actions.className = 'list-actions';
@@ -799,13 +905,18 @@ function renderAuthProfilesList() {
     editBtn.textContent = '✏️';
     editBtn.addEventListener('click', () => startEditAuthProfile(name));
 
+    const testBtn = document.createElement('button');
+    testBtn.className = 'btn btn-small';
+    testBtn.textContent = 'Test Auth';
+    testBtn.addEventListener('click', () => testAuthProfile(name, statusMessage, testBtn));
+
     const deleteBtn = document.createElement('button');
     deleteBtn.className = 'icon-btn';
     deleteBtn.setAttribute('aria-label', 'Delete auth profile');
     deleteBtn.textContent = '🗑️';
     deleteBtn.addEventListener('click', () => deleteAuthProfile(name));
 
-    actions.append(editBtn, deleteBtn);
+    actions.append(testBtn, editBtn, deleteBtn);
     row.append(details, actions);
     list.appendChild(row);
   });
@@ -833,7 +944,10 @@ function renderAuthDiagnostics() {
     const path = profile.storage_state_path || '';
     const row = document.createElement('div');
     row.style.marginBottom = '2px';
-    row.innerHTML = `<span style="font-weight: 500;">${name}:</span> <span style="font-family: monospace; font-size: 0.8rem;">${path}</span> <span style="color: var(--text-tertiary);">(validation requires backend support)</span>`;
+    const status = getAuthStatus(name);
+    const badgeInfo = getAuthStatusBadge(status);
+    const statusText = status ? badgeInfo.label : '⚠️ Unknown';
+    row.innerHTML = `<span style="font-weight: 500;">${name}:</span> <span style="font-family: monospace; font-size: 0.8rem;">${path}</span> <span style="color: var(--text-tertiary);">(${statusText})</span>`;
     diagnosticsEl.appendChild(row);
   });
 }
@@ -844,6 +958,7 @@ function showAuthProfileEditor(profileName = null) {
   const nameInput = document.getElementById('profileName');
   const pathInput = document.getElementById('profileStoragePath');
   const domainsInput = document.getElementById('profileUseDomains');
+  const testUrlInput = document.getElementById('profileTestUrl');
   const status = document.getElementById('profileEditorStatus');
 
   if (!editor) return;
@@ -859,6 +974,7 @@ function showAuthProfileEditor(profileName = null) {
     nameInput.disabled = true;
     pathInput.value = profile.storage_state_path || '';
     domainsInput.value = (profile.use_for_domains || []).join('\n');
+    testUrlInput.value = profile.test_url || '';
     editState.authProfile = profileName;
   } else {
     title.textContent = 'Add Auth Profile';
@@ -866,6 +982,7 @@ function showAuthProfileEditor(profileName = null) {
     nameInput.disabled = false;
     pathInput.value = '';
     domainsInput.value = '';
+    testUrlInput.value = '';
     editState.authProfile = null;
 
     // Auto-update path suggestion when name changes
@@ -900,11 +1017,13 @@ async function saveAuthProfile() {
   const nameInput = document.getElementById('profileName');
   const pathInput = document.getElementById('profileStoragePath');
   const domainsInput = document.getElementById('profileUseDomains');
+  const testUrlInput = document.getElementById('profileTestUrl');
   const status = document.getElementById('profileEditorStatus');
 
   const name = nameInput.value.trim();
   const path = pathInput.value.trim();
   const domainsText = domainsInput.value.trim();
+  const testUrl = testUrlInput.value.trim();
   const domains = domainsText ? domainsText.split('\n').map(d => d.trim()).filter(Boolean) : [];
 
   if (!name) {
@@ -937,7 +1056,8 @@ async function saveAuthProfile() {
 
   cachedCrawlerConfig.playwright.auth_profiles[name] = {
     storage_state_path: path,
-    use_for_domains: domains
+    use_for_domains: domains,
+    test_url: testUrl || null
   };
 
   // Update authProfiles array
@@ -1195,6 +1315,7 @@ async function loadConfigs() {
   authProfiles = Object.keys(playwright.auth_profiles || {});
   document.getElementById('playwrightEnabled').checked = Boolean(playwright.enabled);
 
+  await loadAuthStatus();
   renderAuthProfilesList();
   checkForLegacySettings();
   await loadAuthHints();

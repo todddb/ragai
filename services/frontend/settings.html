@@ -193,6 +193,11 @@
                   <textarea id="profileUseDomains" rows="3" placeholder="policy.byu.edu&#10;auth.example.com"></textarea>
                   <div class="field-help">Auto-apply this profile to these domains (one per line). This is a hint; per-URL auth profile assignment takes precedence.</div>
                 </div>
+                <div class="field">
+                  <label class="field-label" for="profileTestUrl">Test URL (optional)</label>
+                  <input type="text" id="profileTestUrl" placeholder="https://policy.byu.edu/view/business-gifts-and-entertainment-policy" />
+                  <div class="field-help">If provided, this URL is used for auth validation. Defaults to https://&lt;domain&gt;/ or the first seed URL for that domain.</div>
+                </div>
                 <div class="actions-row">
                   <button class="btn btn-primary" id="saveProfileBtn">Save Profile</button>
                   <span class="status-text" id="profileEditorStatus"></span>

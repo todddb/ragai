@@ -753,6 +753,12 @@ html.sidebar-collapsed .sidebar #sidebarToggle {
   color: var(--status-error);
 }
 
+.status-pill.warning {
+  border-color: rgba(245, 158, 11, 0.3);
+  background: rgba(245, 158, 11, 0.1);
+  color: var(--status-warning);
+}
+
 .segmented-control {
   display: inline-flex;
   border: 1px solid var(--border-medium);
