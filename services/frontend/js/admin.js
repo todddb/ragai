@@ -14,7 +14,8 @@ let recommendationsExpanded = false;
 const editState = {
   seed: null,
   blocked: null,
-  allow: null
+  allow: null,
+  authProfile: null
 };
 const logStreams = {
   crawl: null,
@@ -621,6 +622,272 @@ function extractAllowedDomains(rules) {
   return Array.from(domains);
 }
 
+function renderAuthProfilesList() {
+  const list = document.getElementById('authProfilesList');
+  if (!list) return;
+
+  const playwright = cachedCrawlerConfig.playwright || {};
+  const profiles = playwright.auth_profiles || {};
+  const profileNames = Object.keys(profiles);
+
+  if (profileNames.length === 0) {
+    list.innerHTML = '<div style="padding: 12px; text-align: center; color: var(--text-secondary); font-size: 0.85rem;">No auth profiles configured. Click "+ Add Profile" to create one.</div>';
+    return;
+  }
+
+  list.innerHTML = '';
+  profileNames.forEach((name) => {
+    const profile = profiles[name];
+    const row = document.createElement('div');
+    row.className = 'list-row';
+    row.style.alignItems = 'flex-start';
+    row.style.padding = '10px';
+
+    const details = document.createElement('div');
+    details.style.flex = '1';
+    details.style.minWidth = '0';
+
+    const nameEl = document.createElement('div');
+    nameEl.style.fontWeight = '600';
+    nameEl.style.marginBottom = '4px';
+    nameEl.textContent = name;
+
+    const pathEl = document.createElement('div');
+    pathEl.style.fontSize = '0.75rem';
+    pathEl.style.color = 'var(--text-secondary)';
+    pathEl.style.wordBreak = 'break-all';
+    pathEl.textContent = `Path: ${profile.storage_state_path || 'Not set'}`;
+
+    const domainsEl = document.createElement('div');
+    domainsEl.style.fontSize = '0.75rem';
+    domainsEl.style.color = 'var(--text-tertiary)';
+    const domains = profile.use_for_domains || [];
+    domainsEl.textContent = domains.length > 0 ? `Domains: ${domains.join(', ')}` : 'No auto-apply domains';
+
+    details.append(nameEl, pathEl, domainsEl);
+
+    const actions = document.createElement('div');
+    actions.className = 'list-actions';
+
+    const editBtn = document.createElement('button');
+    editBtn.className = 'icon-btn';
+    editBtn.setAttribute('aria-label', 'Edit auth profile');
+    editBtn.textContent = '✏️';
+    editBtn.addEventListener('click', () => startEditAuthProfile(name));
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'icon-btn';
+    deleteBtn.setAttribute('aria-label', 'Delete auth profile');
+    deleteBtn.textContent = '🗑️';
+    deleteBtn.addEventListener('click', () => deleteAuthProfile(name));
+
+    actions.append(editBtn, deleteBtn);
+    row.append(details, actions);
+    list.appendChild(row);
+  });
+
+  renderAuthDiagnostics();
+}
+
+function renderAuthDiagnostics() {
+  const diagnosticsEl = document.getElementById('authDiagnostics');
+  if (!diagnosticsEl) return;
+
+  const playwright = cachedCrawlerConfig.playwright || {};
+  const profiles = playwright.auth_profiles || {};
+  const profileNames = Object.keys(profiles);
+
+  if (profileNames.length === 0) {
+    diagnosticsEl.innerHTML = 'No profiles to diagnose.';
+    return;
+  }
+
+  diagnosticsEl.innerHTML = '<div style="font-weight: 600; margin-bottom: 4px;">Storage State Files:</div>';
+
+  profileNames.forEach((name) => {
+    const profile = profiles[name];
+    const path = profile.storage_state_path || '';
+    const row = document.createElement('div');
+    row.style.marginBottom = '2px';
+    row.innerHTML = `<span style="font-weight: 500;">${name}:</span> <span style="font-family: monospace; font-size: 0.8rem;">${path}</span> <span style="color: var(--text-tertiary);">(validation requires backend support)</span>`;
+    diagnosticsEl.appendChild(row);
+  });
+}
+
+function showAuthProfileEditor(profileName = null) {
+  const editor = document.getElementById('authProfileEditor');
+  const title = document.getElementById('profileEditorTitle');
+  const nameInput = document.getElementById('profileName');
+  const pathInput = document.getElementById('profileStoragePath');
+  const domainsInput = document.getElementById('profileUseDomains');
+  const status = document.getElementById('profileEditorStatus');
+
+  if (!editor) return;
+
+  editor.style.display = 'block';
+  status.textContent = '';
+
+  if (profileName) {
+    title.textContent = `Edit Profile: ${profileName}`;
+    const playwright = cachedCrawlerConfig.playwright || {};
+    const profile = (playwright.auth_profiles || {})[profileName] || {};
+    nameInput.value = profileName;
+    nameInput.disabled = true;
+    pathInput.value = profile.storage_state_path || '';
+    domainsInput.value = (profile.use_for_domains || []).join('\n');
+    editState.authProfile = profileName;
+  } else {
+    title.textContent = 'Add Auth Profile';
+    nameInput.value = '';
+    nameInput.disabled = false;
+    pathInput.value = '';
+    domainsInput.value = '';
+    editState.authProfile = null;
+  }
+
+  editor.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function hideAuthProfileEditor() {
+  const editor = document.getElementById('authProfileEditor');
+  const status = document.getElementById('profileEditorStatus');
+  if (editor) {
+    editor.style.display = 'none';
+  }
+  if (status) {
+    status.textContent = '';
+  }
+  editState.authProfile = null;
+}
+
+function startEditAuthProfile(profileName) {
+  showAuthProfileEditor(profileName);
+}
+
+function saveAuthProfile() {
+  const nameInput = document.getElementById('profileName');
+  const pathInput = document.getElementById('profileStoragePath');
+  const domainsInput = document.getElementById('profileUseDomains');
+  const status = document.getElementById('profileEditorStatus');
+
+  const name = nameInput.value.trim();
+  const path = pathInput.value.trim();
+  const domainsText = domainsInput.value.trim();
+  const domains = domainsText ? domainsText.split('\n').map(d => d.trim()).filter(Boolean) : [];
+
+  if (!name) {
+    setStatus('profileEditorStatus', 'Profile name is required', 'error');
+    return;
+  }
+
+  if (!path) {
+    setStatus('profileEditorStatus', 'Storage state path is required', 'error');
+    return;
+  }
+
+  // Validate unique name (only when creating new profile)
+  if (!editState.authProfile) {
+    const playwright = cachedCrawlerConfig.playwright || {};
+    const existingProfiles = playwright.auth_profiles || {};
+    if (existingProfiles[name]) {
+      setStatus('profileEditorStatus', 'Profile name already exists', 'error');
+      return;
+    }
+  }
+
+  // Update cachedCrawlerConfig
+  if (!cachedCrawlerConfig.playwright) {
+    cachedCrawlerConfig.playwright = {};
+  }
+  if (!cachedCrawlerConfig.playwright.auth_profiles) {
+    cachedCrawlerConfig.playwright.auth_profiles = {};
+  }
+
+  cachedCrawlerConfig.playwright.auth_profiles[name] = {
+    storage_state_path: path,
+    use_for_domains: domains
+  };
+
+  // Update authProfiles array
+  authProfiles = Object.keys(cachedCrawlerConfig.playwright.auth_profiles);
+
+  hideAuthProfileEditor();
+  renderAuthProfilesList();
+  renderAllowTable();
+  setStatus('profileEditorStatus', 'Profile saved (remember to click Save above to persist)', 'success');
+}
+
+function deleteAuthProfile(profileName) {
+  if (!confirm(`Delete auth profile "${profileName}"? This cannot be undone.`)) {
+    return;
+  }
+
+  const playwright = cachedCrawlerConfig.playwright || {};
+  const profiles = playwright.auth_profiles || {};
+
+  if (profiles[profileName]) {
+    delete profiles[profileName];
+    authProfiles = Object.keys(profiles);
+    renderAuthProfilesList();
+    renderAllowTable();
+  }
+}
+
+async function migrateLegacyPlaywrightSettings() {
+  const playwright = cachedCrawlerConfig.playwright || {};
+
+  // Check if legacy fields exist
+  const hasLegacyPath = Boolean(playwright.storage_state_path);
+  const hasLegacyDomains = Array.isArray(playwright.use_for_domains) && playwright.use_for_domains.length > 0;
+
+  if (!hasLegacyPath && !hasLegacyDomains) {
+    return;
+  }
+
+  // Create default profile from legacy settings
+  if (!playwright.auth_profiles) {
+    playwright.auth_profiles = {};
+  }
+
+  if (!playwright.auth_profiles.default) {
+    playwright.auth_profiles.default = {
+      storage_state_path: playwright.storage_state_path || '',
+      use_for_domains: playwright.use_for_domains || []
+    };
+  }
+
+  // Remove legacy fields from the config object
+  delete playwright.storage_state_path;
+  delete playwright.use_for_domains;
+
+  cachedCrawlerConfig.playwright = playwright;
+  authProfiles = Object.keys(playwright.auth_profiles);
+
+  // Hide migration banner
+  const banner = document.getElementById('migrationBanner');
+  if (banner) {
+    banner.style.display = 'none';
+  }
+
+  renderAuthProfilesList();
+  renderAllowTable();
+  setStatus('saveAuthStatus', 'Legacy settings migrated to "default" profile. Click Save to persist.', 'success');
+}
+
+function checkForLegacySettings() {
+  const playwright = cachedCrawlerConfig.playwright || {};
+  const hasAuthProfiles = playwright.auth_profiles && Object.keys(playwright.auth_profiles).length > 0;
+  const hasLegacyPath = Boolean(playwright.storage_state_path);
+  const hasLegacyDomains = Array.isArray(playwright.use_for_domains) && playwright.use_for_domains.length > 0;
+
+  const banner = document.getElementById('migrationBanner');
+  if (banner && (hasLegacyPath || hasLegacyDomains) && !hasAuthProfiles) {
+    banner.style.display = 'block';
+  } else if (banner) {
+    banner.style.display = 'none';
+  }
+}
+
 function showTab(name) {
   document.querySelectorAll('.tab-content').forEach((el) => {
     el.style.display = el.id === name ? 'block' : 'none';
@@ -755,8 +1022,9 @@ async function loadConfigs() {
   const playwright = cachedCrawlerConfig.playwright || {};
   authProfiles = Object.keys(playwright.auth_profiles || {});
   document.getElementById('playwrightEnabled').checked = Boolean(playwright.enabled);
-  document.getElementById('playwrightStorageStatePath').value = playwright.storage_state_path || '';
-  document.getElementById('playwrightUseDomains').value = (playwright.use_for_domains || []).join('\n');
+
+  renderAuthProfilesList();
+  checkForLegacySettings();
   await loadAuthHints();
   renderAllowTable();
 }
@@ -813,21 +1081,22 @@ async function saveCrawlConfig() {
   };
   const existingPlaywright = cachedCrawlerConfig.playwright || {};
   const playwrightPayload = {
-    ...existingPlaywright,
-    enabled: document.getElementById('playwrightEnabled').checked
+    enabled: document.getElementById('playwrightEnabled').checked,
+    auth_profiles: existingPlaywright.auth_profiles || {}
   };
-  if (!existingPlaywright.auth_profiles) {
-    playwrightPayload.storage_state_path = document.getElementById('playwrightStorageStatePath').value.trim();
-    playwrightPayload.use_for_domains = document
-      .getElementById('playwrightUseDomains')
-      .value.split('\n')
-      .filter(Boolean);
-  }
+
+  // Never write legacy fields (storage_state_path, use_for_domains)
+  // Auth profiles are managed separately via the auth profiles UI
+
   if (playwrightPayload.headless === undefined) {
-    playwrightPayload.headless = true;
+    playwrightPayload.headless = existingPlaywright.headless !== undefined ? existingPlaywright.headless : true;
+  } else {
+    playwrightPayload.headless = existingPlaywright.headless;
   }
   if (playwrightPayload.navigation_timeout_ms === undefined) {
-    playwrightPayload.navigation_timeout_ms = 60000;
+    playwrightPayload.navigation_timeout_ms = existingPlaywright.navigation_timeout_ms || 60000;
+  } else {
+    playwrightPayload.navigation_timeout_ms = existingPlaywright.navigation_timeout_ms;
   }
   const crawlerPayload = {
     ...cachedCrawlerConfig,
@@ -1287,6 +1556,29 @@ document.getElementById('purgeCandidates')?.addEventListener('click', async () =
   } catch (error) {
     setStatus(statusTarget, 'Error purging candidates', 'error');
   }
+});
+
+document.getElementById('addAuthProfileBtn')?.addEventListener('click', () => {
+  showAuthProfileEditor();
+});
+
+document.getElementById('saveProfileBtn')?.addEventListener('click', () => {
+  saveAuthProfile();
+});
+
+document.getElementById('cancelProfileEdit')?.addEventListener('click', () => {
+  hideAuthProfileEditor();
+});
+
+document.getElementById('migrateLegacyBtn')?.addEventListener('click', async () => {
+  await migrateLegacyPlaywrightSettings();
+});
+
+document.getElementById('saveAuthConfigBtn')?.addEventListener('click', saveCrawlConfig);
+
+document.getElementById('openCaptureInstructions')?.addEventListener('click', (e) => {
+  e.preventDefault();
+  alert('Capture Instructions:\n\n1. Use the tool at tools/wsl/capture_auth_state.py to capture auth state\n2. Run: python tools/wsl/capture_auth_state.py\n3. The tool will guide you through creating/updating auth profiles\n4. Storage state files are saved to secrets/playwright/\n5. Update your auth profile with the new storage state path\n\nSee the README in tools/wsl/ for more details.');
 });
 
 document.getElementById('jobTable').addEventListener('click', async (event) => {

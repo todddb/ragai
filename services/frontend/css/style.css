@@ -1006,6 +1006,24 @@ html.sidebar-collapsed .sidebar #sidebarToggle {
   border-bottom: none;
 }
 
+.allowed-row > * {
+  min-width: 0;
+}
+
+.allowed-row input[type="text"],
+.allowed-row select {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
+}
+
+.allowed-row [data-input="true"] {
+  min-width: 0;
+}
+
 .allowed-header {
   font-size: 0.7rem;
   text-transform: uppercase;
@@ -1015,6 +1033,8 @@ html.sidebar-collapsed .sidebar #sidebarToggle {
 
 .allowed-url {
   word-break: break-all;
+  overflow-wrap: break-word;
+  min-width: 0;
 }
 
 .match-badge {
@@ -1258,4 +1278,17 @@ html.sidebar-collapsed .sidebar #sidebarToggle {
 .table .actions {
   display: flex;
   gap: var(--spacing-xs);
+}
+
+#authProfilesList {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: #f8fafc;
+  min-height: 60px;
+}
+
+#authProfilesList:empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
