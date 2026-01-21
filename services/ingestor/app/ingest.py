@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Tuple
 import yaml
 from qdrant_client import QdrantClient
 
@@ -11,6 +11,17 @@ from app.utils.qdrant import delete_by_doc_id, ensure_collection, upsert_vectors
 
 ARTIFACT_DIR = Path("/app/data/artifacts")
 CONFIG_PATH = Path("/app/config/system.yml")
+BOILERPLATE_KEYWORDS = {
+    "skip to main content",
+    "burger menu",
+    "close menu",
+    "sign in to view",
+    "sign in",
+    "log in",
+    "loading",
+}
+PDF_MARKER = "%pdf-"
+MIN_CHUNK_LENGTH = 40
 
 
 def _load_config(path: Path) -> Dict:
@@ -23,6 +34,25 @@ def _load_embeddings(texts: List[str], host: str, model: str) -> List[List[float
 
 def _doc_ids_on_disk() -> Set[str]:
     return {path.parent.name for path in ARTIFACT_DIR.glob("*/artifact.json")}
+
+
+def _filter_chunks(chunks: List[Dict]) -> Tuple[List[Dict], Dict[str, int]]:
+    kept: List[Dict] = []
+    skipped_counts = {"boilerplate": 0, "pdf": 0, "too_short": 0}
+    for chunk in chunks:
+        text = chunk.get("text", "")
+        normalized = text.lower()
+        if PDF_MARKER in normalized:
+            skipped_counts["pdf"] += 1
+            continue
+        if any(keyword in normalized for keyword in BOILERPLATE_KEYWORDS):
+            skipped_counts["boilerplate"] += 1
+            continue
+        if len(text.strip()) < MIN_CHUNK_LENGTH:
+            skipped_counts["too_short"] += 1
+            continue
+        kept.append(chunk)
+    return kept, skipped_counts
 
 
 def ingest() -> None:
@@ -67,9 +97,21 @@ def ingest() -> None:
             for line in chunks_path.read_text(encoding="utf-8").splitlines():
                 chunks.append(json.loads(line))
 
-            texts = [chunk["text"] for chunk in chunks]
+            total_chunks = len(chunks)
+            filtered_chunks, skipped_counts = _filter_chunks(chunks)
+            kept_chunks = len(filtered_chunks)
+            skipped_total = total_chunks - kept_chunks
+            print(
+                "Doc "
+                f"{doc_id}: total_chunks={total_chunks} kept_chunks={kept_chunks} "
+                f"skipped_chunks={skipped_total} skipped_by_reason={skipped_counts}"
+            )
+            if kept_chunks == 0:
+                continue
+
+            texts = [chunk["text"] for chunk in filtered_chunks]
             vectors = _load_embeddings(texts, ollama_host, embedding_model)
-            ids = [chunk["chunk_id"] for chunk in chunks]
+            ids = [chunk["chunk_id"] for chunk in filtered_chunks]
             payloads = [
                 {
                     "doc_id": doc_id,
@@ -78,7 +120,7 @@ def ingest() -> None:
                     "title": artifact.get("title", ""),
                     "text": chunk["text"],
                 }
-                for chunk in chunks
+                for chunk in filtered_chunks
             ]
             upsert_vectors(client, collection, ids, vectors, payloads)
 
@@ -89,7 +131,7 @@ def ingest() -> None:
                     artifact["url"],
                     content_hash,
                     datetime.utcnow().isoformat(),
-                    len(chunks),
+                    kept_chunks,
                 ),
             )
             conn.executemany(
@@ -101,7 +143,7 @@ def ingest() -> None:
                         chunk["chunk_index"],
                         chunk["chunk_id"],
                     )
-                    for chunk in chunks
+                    for chunk in filtered_chunks
                 ],
             )
         conn.commit()

@@ -9,8 +9,32 @@ from markdownify import markdownify
 from app.parsers.types import ParsedDocument
 
 
+BOILERPLATE_PHRASES = {
+    "table of contents",
+    "close menu",
+    "sign in",
+    "sign in to view",
+    "skip to main content",
+    "burger menu",
+}
+
+
 def _collapse_whitespace(text: str) -> str:
     return " ".join(text.split())
+
+
+def _strip_layout_elements(soup: BeautifulSoup) -> None:
+    for tag in soup.find_all(["header", "nav", "footer", "aside"]):
+        tag.decompose()
+    for tag in soup.find_all(attrs={"role": ["navigation", "banner", "contentinfo"]}):
+        tag.decompose()
+
+
+def _strip_boilerplate_sections(soup: BeautifulSoup) -> None:
+    for tag in soup.find_all(["section", "div", "nav", "aside"]):
+        text = tag.get_text(separator=" ", strip=True).lower()
+        if any(phrase in text for phrase in BOILERPLATE_PHRASES):
+            tag.decompose()
 
 
 def parse_html(content_bytes: bytes, base_url: str) -> ParsedDocument:
@@ -28,7 +52,10 @@ def parse_html(content_bytes: bytes, base_url: str) -> ParsedDocument:
     for tag in soup.find_all("a", href=True):
         links.append(urljoin(base_url, tag["href"]))
 
-    body = soup.body or soup
+    _strip_layout_elements(soup)
+    _strip_boilerplate_sections(soup)
+
+    body = soup.find("main") or soup.find("article") or soup.body or soup
     markdown = markdownify(str(body)).strip()
     text = _collapse_whitespace(body.get_text(separator=" "))
 
