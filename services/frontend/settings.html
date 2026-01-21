@@ -246,6 +246,25 @@
                 <h3>Live Log</h3>
               </div>
               <div class="log-area" id="ingestLog"></div>
+              <!-- Ingest Progress UI -->
+              <div id="ingest-progress-wrapper" style="margin-top:16px; display:none;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <div style="flex:1; margin-right:12px;">
+                    <div style="font-weight:600; margin-bottom:6px;">Ingest Progress</div>
+                    <div style="background:#eef2f6; border-radius:6px; height:14px; overflow:hidden;">
+                      <div id="ingest-progress-bar" style="height:100%; width:0%; background:#007bff; transition: width 400ms ease;"></div>
+                    </div>
+                  </div>
+                  <div style="min-width:260px;">
+                    <div style="font-size:13px;" id="ingest-summary">
+                      <div>Artifacts: <span id="ingest-artifacts">0/0</span></div>
+                      <div>Chunks inserted: <span id="ingest-chunks">0</span></div>
+                      <div>Skipped: <span id="ingest-skipped">0</span></div>
+                      <div style="color:darkred;">Errors: <span id="ingest-errors">0</span></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
               <div class="actions-row align-right">
                 <span id="ingestLogStatus" class="status-text"></span>
                 <button class="btn" id="exportIngestLog">Export Log</button>
@@ -427,5 +446,87 @@
   <script src="js/config.js?v=2"></script>
   <script src="js/admin.js?v=2"></script>
   <script src="js/settings.js?v=2"></script>
+  <script>
+    // Ingest progress parser and UI updater
+    (function(){
+      // Adjust selectors to match your page structure:
+      const liveLogEl = document.getElementById('ingestLog');
+      const wrapper = document.getElementById('ingest-progress-wrapper');
+      const bar = document.getElementById('ingest-progress-bar');
+      const artifactsEl = document.getElementById('ingest-artifacts');
+      const chunksEl = document.getElementById('ingest-chunks');
+      const skippedEl = document.getElementById('ingest-skipped');
+      const errorsEl = document.getElementById('ingest-errors');
+
+      if (!liveLogEl || !wrapper) return;
+
+      // parsing state
+      let lastParsedLen = 0;
+      let totalArtifacts = 0;
+      let processedArtifacts = 0;
+      let totalChunksInserted = 0;
+      let totalSkipped = 0;
+      let totalErrors = 0;
+
+      function parseNewLog() {
+        const text = liveLogEl.innerText || liveLogEl.textContent || '';
+        if (text.length === lastParsedLen) return;
+        const newText = text.slice(lastParsedLen);
+        lastParsedLen = text.length;
+
+        const lines = newText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+        for (const line of lines) {
+          // start line
+          let m;
+          if ((m = line.match(/^INGEST_PROGRESS START total_artifacts=(\d+)/))) {
+            totalArtifacts = parseInt(m[1],10);
+            processedArtifacts = 0;
+            totalChunksInserted = 0;
+            totalSkipped = 0;
+            totalErrors = 0;
+            wrapper.style.display = totalArtifacts ? 'block' : 'none';
+            // Reset UI
+            artifactsEl.textContent = `0/${totalArtifacts}`;
+            chunksEl.textContent = '0';
+            skippedEl.textContent = '0';
+            errorsEl.textContent = '0';
+            bar.style.width = '0%';
+          } else if ((m = line.match(/^INGEST_PROGRESS artifact(?:_skipped_unchanged)?\s+index=(\d+)\/(\d+).*?kept_chunks=(\d+).*?skipped_chunks=(\d+)/))) {
+            processedArtifacts = parseInt(m[1],10);
+            totalArtifacts = parseInt(m[2],10);
+            const kept = parseInt(m[3],10);
+            const skipped = parseInt(m[4],10);
+            // Update counts
+            totalSkipped += skipped;
+            // Update UI
+            artifactsEl.textContent = `${processedArtifacts}/${totalArtifacts}`;
+            skippedEl.textContent = totalSkipped;
+            // Update progress bar
+            const pct = totalArtifacts ? Math.round((processedArtifacts/totalArtifacts)*100) : 100;
+            bar.style.width = pct + '%';
+          } else if ((m = line.match(/^INGEST_BATCH .*inserted_chunks=(\d+)/))) {
+            totalChunksInserted += parseInt(m[1],10);
+            chunksEl.textContent = totalChunksInserted;
+          } else if ((m = line.match(/^INGEST_ERROR/))) {
+            totalErrors += 1;
+            errorsEl.textContent = totalErrors;
+          } else if ((m = line.match(/^INGEST_COMPLETE total_artifacts=(\d+) total_documents=.+ total_chunks=(\d+)/))) {
+            // final summary
+            const finalArtifacts = parseInt(m[1],10);
+            const finalChunks = parseInt(m[2],10);
+            artifactsEl.textContent = `${finalArtifacts}/${finalArtifacts}`;
+            chunksEl.textContent = finalChunks;
+            bar.style.width = '100%';
+          }
+        }
+      }
+
+      // Poll every 1.5s for new logs
+      setInterval(parseNewLog, 1500);
+
+      // kick initial parse
+      parseNewLog();
+    })();
+  </script>
 </body>
 </html>
