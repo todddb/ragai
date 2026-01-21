@@ -17,7 +17,7 @@ allow_rules:
     pptx: false
   playwright: false
   allow_http: false
-  auth_profile: null
+  auth_profile: policy_cas
 - pattern: https://hrs.byu.edu/procedures/
   match: prefix
   types:

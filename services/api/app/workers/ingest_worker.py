@@ -109,17 +109,47 @@ def _delete_by_doc_id(client: QdrantClient, collection: str, doc_id: str) -> Non
 
 
 def _upsert_vectors(
-    client: QdrantClient,
+    client,
     collection: str,
-    ids: List[str],
-    vectors: List[List[float]],
-    payloads: List[dict],
+    ids: list,
+    vectors: list,
+    payloads: list,
+    batch_size: int = 50,
 ) -> None:
-    client.upsert(
-        collection_name=collection,
-        points=rest.Batch(ids=ids, vectors=vectors, payloads=payloads),
-    )
+    """
+    Upsert points into Qdrant in smaller batches to avoid large JSON payloads.
+    This replaces a previous single-call implementation that used rest.Batch(ids=..., vectors=..., payloads=...).
+    """
+    if not (len(ids) == len(vectors) == len(payloads)):
+        raise ValueError("ids, vectors and payloads must have equal length")
 
+    # Send in batches
+    for i in range(0, len(ids), batch_size):
+        batch_ids = ids[i : i + batch_size]
+        batch_vectors = vectors[i : i + batch_size]
+        batch_payloads = payloads[i : i + batch_size]
+
+        # Optional debug: print approximate JSON size of this batch
+        try:
+            sample_body = {
+                "points": [
+                    {"id": _id, "vector": vec, "payload": pl}
+                    for _id, vec, pl in zip(batch_ids, batch_vectors, batch_payloads)
+                ]
+            }
+            print(f"DEBUG: upsert batch bytes={len(json.dumps(sample_body).encode('utf-8'))}", file=sys.stderr)
+        except Exception:
+            # never fail on debug measurement
+            pass
+
+        # Build point structs and upsert this batch
+        client.upsert(
+            collection_name=collection,
+            points=[
+                rest.PointStruct(id=_id, vector=vec, payload=pl)
+                for _id, vec, pl in zip(batch_ids, batch_vectors, batch_payloads)
+            ],
+        )
 
 def _load_embeddings(texts: List[str], host: str, model: str) -> List[List[float]]:
     return [embed_text(host, model, text) for text in texts]

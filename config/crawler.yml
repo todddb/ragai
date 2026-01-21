@@ -12,7 +12,6 @@ url_canonicalization:
   - gclid
 playwright:
   enabled: true
-  headless: true
   auth_profiles:
     default:
       storage_state_path: secrets/playwright/default-storageState.json
@@ -22,6 +21,7 @@ playwright:
       test_url: https://policy.byu.edu/view/business-gifts-and-entertainment-policy
       use_for_domains:
       - policy.byu.edu
+  headless: true
   navigation_timeout_ms: 60000
 structured_store:
   enabled: true
