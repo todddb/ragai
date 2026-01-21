@@ -13,9 +13,14 @@ url_canonicalization:
 playwright:
   enabled: true
   headless: true
-  storage_state_path: /app/secrets/playwright/policy-byu-storageState.json
-  use_for_domains:
-  - policy.byu.edu
+  auth_profiles:
+    default:
+      storage_state_path: /app/secrets/playwright/default-storageState.json
+      use_for_domains: []
+    policy_cas:
+      storage_state_path: /app/secrets/playwright/policy-byu-storageState.json
+      use_for_domains:
+      - policy.byu.edu
   navigation_timeout_ms: 60000
 structured_store:
   enabled: true

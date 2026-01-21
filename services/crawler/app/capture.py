@@ -4,7 +4,7 @@ import logging
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import tiktoken
@@ -16,6 +16,7 @@ from app.fetch_redirect import fetch_resource_httpx_redirect_safe
 from app.parsers.router import parse_by_type
 from app.structured_store.sqlite_store import SQLiteStructuredStore
 from app.utils.url import canonicalize_url, doc_id_for_url
+from app.auth_hints import record_auth_hint
 
 CONFIG_PATH = Path("/app/config/crawler.yml")
 INGEST_CONFIG_PATH = Path("/app/config/ingest.yml")
@@ -54,6 +55,42 @@ def _is_html_content_type(content_type: str) -> bool:
     return normalized in {"text/html", "application/xhtml+xml"}
 
 
+def _match_allow_rule(url: str, allow_block_cfg: Dict) -> Optional[Dict]:
+    allow_rules = allow_block_cfg.get("allow_rules", [])
+    for rule in allow_rules:
+        if isinstance(rule, str):
+            pattern = rule
+            match_type = "prefix"
+        else:
+            pattern = rule.get("pattern", "")
+            match_type = rule.get("match", "prefix")
+        if match_type == "exact" and url == pattern:
+            return rule
+        if match_type != "exact" and pattern and url.startswith(pattern):
+            return rule
+    return None
+
+
+def _select_auth_profile(
+    playwright_config: Dict,
+    allow_rule: Optional[Dict],
+    hostname: str,
+) -> Tuple[Optional[str], Optional[Dict]]:
+    auth_profiles = playwright_config.get("auth_profiles", {})
+    if auth_profiles:
+        profile_name = None
+        if allow_rule and not isinstance(allow_rule, str):
+            profile_name = allow_rule.get("auth_profile") or allow_rule.get("authProfile")
+        if profile_name:
+            return profile_name, auth_profiles.get(profile_name)
+        for name, profile in auth_profiles.items():
+            domains = [domain.lower() for domain in profile.get("use_for_domains", [])]
+            if hostname in domains:
+                return name, profile
+        return None, None
+    return None, None
+
+
 def _write_chunks(artifact_path: Path, doc_id: str, text: str, chunking: Dict) -> None:
     chunks = _chunk_text(
         text,
@@ -85,9 +122,13 @@ def capture_url(url: str) -> Tuple[str, List[str]]:
     time.sleep(delay)
     playwright_config = crawler_config.get("playwright", {})
     hostname = (urlparse(canonical).hostname or "").lower()
-    use_domains = [domain.lower() for domain in playwright_config.get("use_for_domains", [])]
-    use_playwright = bool(playwright_config.get("enabled")) and hostname in use_domains
     allow_block_cfg = load_allow_block()
+    allow_rule = _match_allow_rule(canonical, allow_block_cfg)
+    profile_name, selected_profile = _select_auth_profile(playwright_config, allow_rule, hostname)
+    use_domains = [domain.lower() for domain in playwright_config.get("use_for_domains", [])]
+    use_playwright = bool(playwright_config.get("enabled")) and (
+        selected_profile is not None or hostname in use_domains
+    )
     logger = logging.getLogger(__name__)
     logger.info("FETCH=httpx url=%s", canonical)
     fetch_result = fetch_resource_httpx_redirect_safe(
@@ -105,7 +146,16 @@ def capture_url(url: str) -> Tuple[str, List[str]]:
     ingest_chunking = ingest_config.get("chunking", {})
 
     if not fetch_result.ok:
-        if fetch_result.status == "blocked_redirect":
+        if fetch_result.status == "auth_required":
+            auth_info = fetch_result.auth_info or {}
+            logger.info(
+                "SKIP_AUTH_REQUIRED url=%s redirect_to=%s",
+                canonical,
+                auth_info.get("redirect_location", ""),
+            )
+            markdown = "Skipped: auth required"
+            record_auth_hint(auth_info)
+        elif fetch_result.status == "blocked_redirect":
             logger.info(
                 "SKIP_BLOCKED_REDIRECT url=%s blocked_to=%s", canonical, fetch_result.blocked_to
             )
@@ -127,7 +177,10 @@ def capture_url(url: str) -> Tuple[str, List[str]]:
             "status": fetch_result.status,
             "status_code": fetch_result.status_code,
             "markdown_path": "content.md",
-            "meta": {"redirect_chain": fetch_result.redirect_chain},
+            "meta": {
+                "redirect_chain": fetch_result.redirect_chain,
+                "auth_redirect": fetch_result.auth_info or {},
+            },
             "content_hash": _content_hash(markdown),
             "fetched_at": datetime.utcnow().isoformat() + "Z",
             "title": "",
@@ -143,10 +196,15 @@ def capture_url(url: str) -> Tuple[str, List[str]]:
     content_type = fetch_result.content_type
     status_code = fetch_result.status_code
     if use_playwright and _is_html_content_type(content_type):
-        storage_state_path = playwright_config.get("storage_state_path")
+        storage_state_path = None
+        if selected_profile:
+            storage_state_path = selected_profile.get("storage_state_path")
+        else:
+            storage_state_path = playwright_config.get("storage_state_path")
         if not storage_state_path:
             raise ValueError("Playwright storage_state_path is not configured for this crawl.")
-        logger.info("FETCH=playwright url=%s", fetch_url)
+        profile_label = f" profile={profile_name}" if profile_name else ""
+        logger.info("FETCH=playwright url=%s%s", fetch_url, profile_label)
         html = fetch_html_playwright(
             fetch_url,
             storage_state_path=storage_state_path,

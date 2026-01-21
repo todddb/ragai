@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -17,10 +17,29 @@ class FetchResult:
     content_type: str
     redirect_chain: List[Dict[str, str | int]] = field(default_factory=list)
     blocked_to: Optional[str] = None
+    auth_info: Optional[Dict[str, str]] = None
 
 
 def _normalize_content_type(value: str) -> str:
     return (value or "").split(";")[0].strip().lower()
+
+
+def _match_auth_redirect(target: str) -> Optional[str]:
+    parsed = urlparse(target)
+    host = (parsed.hostname or "").lower()
+    path = (parsed.path or "").lower()
+    query = (parsed.query or "").lower()
+    if host == "cas.byu.edu" and "/cas/login" in path:
+        return "cas.byu.edu/cas/login"
+    if host == "auth.brightspot.byu.edu" and "/authenticate/login" in path:
+        return "auth.brightspot.byu.edu/authenticate/login"
+    if "login.byu.edu" in host:
+        return "login.byu.edu"
+    if "/sso/login" in path:
+        return "/SSO/login"
+    if "service=" in query or "returnpath=" in query:
+        return "sso_query"
+    return None
 
 
 def fetch_resource_httpx_redirect_safe(
@@ -65,6 +84,24 @@ def fetch_resource_httpx_redirect_safe(
                 redirect_chain.append(
                     {"from": str(response.url), "to": target, "status_code": status_code}
                 )
+                matched_auth = _match_auth_redirect(target)
+                if matched_auth:
+                    parsed_target = urlparse(target)
+                    return FetchResult(
+                        ok=False,
+                        status="auth_required",
+                        status_code=status_code,
+                        final_url=str(response.url),
+                        content_bytes=b"",
+                        content_type="",
+                        redirect_chain=redirect_chain,
+                        auth_info={
+                            "original_url": current_url,
+                            "redirect_location": target,
+                            "redirect_host": (parsed_target.hostname or ""),
+                            "matched_auth_pattern": matched_auth,
+                        },
+                    )
                 if not is_allowed_fn(target, allow_block_cfg):
                     return FetchResult(
                         ok=False,
