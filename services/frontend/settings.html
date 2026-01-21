@@ -94,7 +94,10 @@
               </div>
 
               <div class="field">
-                <h3 class="section-heading">Allowed URLs</h3>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                  <h3 class="section-heading" style="margin: 0; border: none; padding: 0;">Allowed URLs</h3>
+                  <a href="#authProfiles" class="link" style="font-size: 0.85rem;" onclick="document.getElementById('playwrightEnabled').scrollIntoView({behavior: 'smooth', block: 'center'}); return false;">Manage Auth Profiles ↓</a>
+                </div>
                 <div class="allowed-table" id="allowTable"></div>
                 <div class="list-add">
                   <input id="allowAddInput" type="text" placeholder="https://www.byu.edu/hr/" />
@@ -138,23 +141,69 @@
 
             <section class="admin-card">
               <div class="card-header">
-                <h3>Playwright</h3>
+                <h3>Authentication (Playwright)</h3>
+                <div class="card-actions">
+                  <button class="btn btn-primary" id="saveAuthConfigBtn">Save</button>
+                  <span class="status-text" id="saveAuthStatus"></span>
+                </div>
               </div>
-              <div class="form-grid">
+
+              <div class="field" style="margin-bottom: 1.5rem;">
+                <label class="field-label" for="playwrightEnabled">Playwright enabled</label>
+                <input type="checkbox" id="playwrightEnabled" />
+                <div class="field-help">Master toggle for Playwright-based authenticated crawling.</div>
+              </div>
+
+              <div id="migrationBanner" style="display: none; padding: 12px; background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; margin-bottom: 1rem;">
+                <div style="font-weight: 600; color: #92400e; margin-bottom: 4px;">Migration Required</div>
+                <div style="font-size: 0.85rem; color: #78350f;">
+                  Legacy Playwright settings detected. Click "Migrate to Auth Profiles" to convert them to the new auth profile format.
+                </div>
+                <button class="btn btn-small" id="migrateLegacyBtn" style="margin-top: 8px;">Migrate to Auth Profiles</button>
+              </div>
+
+              <div class="field">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                  <h4 style="margin: 0; font-size: 1rem; font-weight: 600;">Auth Profiles</h4>
+                  <button class="btn btn-small" id="addAuthProfileBtn">+ Add Profile</button>
+                </div>
+                <div class="field-help" style="margin-bottom: 12px;">
+                  Configure authentication profiles for different domains. Each profile contains a Playwright storage state with cookies and auth tokens.
+                </div>
+                <div id="authProfilesList"></div>
+              </div>
+
+              <div id="authProfileEditor" style="display: none; margin-top: 1rem; padding: 1rem; border: 1px solid var(--border-medium); border-radius: 8px; background: #f8fafc;">
+                <h4 style="margin-top: 0;">
+                  <span id="profileEditorTitle">Add Auth Profile</span>
+                  <button class="btn btn-small" id="cancelProfileEdit" style="float: right;">Cancel</button>
+                </h4>
                 <div class="field">
-                  <label class="field-label" for="playwrightEnabled">Playwright enabled</label>
-                  <input type="checkbox" id="playwrightEnabled" />
-                  <div class="field-help">Enable Playwright for authenticated crawling.</div>
+                  <label class="field-label" for="profileName">Profile name</label>
+                  <input type="text" id="profileName" placeholder="e.g., policy_cas" />
+                  <div class="field-help">Unique identifier for this auth profile.</div>
                 </div>
                 <div class="field">
-                  <label class="field-label" for="playwrightStorageStatePath">Storage state path</label>
-                  <input type="text" id="playwrightStorageStatePath" />
-                  <div class="field-help">Absolute path inside the crawler container.</div>
+                  <label class="field-label" for="profileStoragePath">Storage state path</label>
+                  <input type="text" id="profileStoragePath" placeholder="secrets/playwright/profile-name-storageState.json" />
+                  <div class="field-help">Path to Playwright storage state file (relative to repo root, or absolute).</div>
                 </div>
                 <div class="field">
-                  <label class="field-label" for="playwrightUseDomains">Use-for domains</label>
-                  <textarea id="playwrightUseDomains" rows="6"></textarea>
-                  <div class="field-help">One per line.</div>
+                  <label class="field-label" for="profileUseDomains">Use-for domains (optional)</label>
+                  <textarea id="profileUseDomains" rows="3" placeholder="policy.byu.edu&#10;auth.example.com"></textarea>
+                  <div class="field-help">Auto-apply this profile to these domains (one per line). This is a hint; per-URL auth profile assignment takes precedence.</div>
+                </div>
+                <div class="actions-row">
+                  <button class="btn btn-primary" id="saveProfileBtn">Save Profile</button>
+                  <span class="status-text" id="profileEditorStatus"></span>
+                </div>
+              </div>
+
+              <div class="field" style="margin-top: 1.5rem;">
+                <h4 style="margin: 0 0 8px 0; font-size: 1rem; font-weight: 600;">Diagnostics & Tools</h4>
+                <div id="authDiagnostics" style="font-size: 0.85rem; color: var(--text-secondary);"></div>
+                <div style="margin-top: 8px;">
+                  <a href="#" id="openCaptureInstructions" class="link" style="font-size: 0.85rem;">View capture instructions</a>
                 </div>
               </div>
             </section>
