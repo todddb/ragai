@@ -143,9 +143,9 @@ def ingest() -> None:
                          chunk["chunk_id"],
                          doc_id,
                          chunk["chunk_index"],
-                         chunk["chunk_id"],
+                         ids[i],
                     )
-                    for chunk in filtered_chunks
+                    for i,chunk in enumerate(filtered_chunks)
                  ],
             )
 
