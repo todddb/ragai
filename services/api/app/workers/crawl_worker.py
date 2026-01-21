@@ -9,6 +9,7 @@ from urllib.parse import parse_qsl, urljoin, urlparse, urlunparse
 import httpx
 import yaml
 
+from app.utils.auth_hints import record_auth_hint
 try:
     import tiktoken  # type: ignore
 except Exception:
@@ -25,6 +26,12 @@ INGEST_CONFIG_PATH = Path("/app/config/ingest.yml")
 ARTIFACT_DIR = Path("/app/data/artifacts")
 CANDIDATE_PATH = Path("/app/data/candidates/candidates.jsonl")
 PROCESSED_PATH = Path("/app/data/candidates/processed.json")
+
+
+class AuthRequiredError(RuntimeError):
+    def __init__(self, auth_info: Dict[str, str]):
+        super().__init__("Auth required")
+        self.auth_info = auth_info
 
 
 def _require_tiktoken() -> None:
@@ -183,6 +190,24 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _match_auth_redirect(target: str) -> str | None:
+    parsed = urlparse(target)
+    host = (parsed.hostname or "").lower()
+    path = (parsed.path or "").lower()
+    query = (parsed.query or "").lower()
+    if host == "cas.byu.edu" and "/cas/login" in path:
+        return "cas.byu.edu/cas/login"
+    if host == "auth.brightspot.byu.edu" and "/authenticate/login" in path:
+        return "auth.brightspot.byu.edu/authenticate/login"
+    if "login.byu.edu" in host:
+        return "login.byu.edu"
+    if "/sso/login" in path:
+        return "/SSO/login"
+    if "service=" in query or "returnpath=" in query:
+        return "sso_query"
+    return None
+
+
 def _capture_url(url: str, allow_http: bool = False) -> List[str]:
     _require_bs4()
     crawler_config = _load_crawler_config()
@@ -193,7 +218,22 @@ def _capture_url(url: str, allow_http: bool = False) -> List[str]:
     delay = crawler_config.get("request_delay", 1.0)
     timeout = crawler_config.get("timeout", 30)
     time.sleep(delay)
-    response = httpx.get(canonical, headers=headers, timeout=timeout)
+    response = httpx.get(canonical, headers=headers, timeout=timeout, follow_redirects=False)
+    if response.status_code in {301, 302, 303, 307, 308}:
+        location = response.headers.get("location")
+        if location:
+            target = urljoin(str(response.url), location)
+            matched_auth = _match_auth_redirect(target)
+            if matched_auth:
+                parsed_target = urlparse(target)
+                raise AuthRequiredError(
+                    {
+                        "original_url": canonical,
+                        "redirect_location": target,
+                        "redirect_host": (parsed_target.hostname or ""),
+                        "matched_auth_pattern": matched_auth,
+                    }
+                )
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
     title = soup.title.string.strip() if soup.title and soup.title.string else ""
@@ -357,6 +397,11 @@ def run_crawl_job(log, job_id: str = None) -> None:
             metrics["captured"] += 1
             metrics["artifacts_written"] += 1
             log(f"Captured {url} with {len(links)} link(s)")
+        except AuthRequiredError as exc:
+            metrics["skipped"]["auth_required"] += 1
+            record_auth_hint(exc.auth_info)
+            auth_location = exc.auth_info.get("redirect_location", "")
+            log(f"Auth required for {url} (redirect to {auth_location})")
         except httpx.HTTPStatusError as exc:
             metrics["errors"] += 1
             status_code = exc.response.status_code

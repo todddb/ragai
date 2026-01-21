@@ -2,6 +2,8 @@ let currentCrawlJobId = null;
 let currentIngestJobId = null;
 let currentJobLogId = null;
 let cachedCrawlerConfig = {};
+let authProfiles = [];
+let authHints = { by_domain: {}, recent: [] };
 const crawlState = {
   seeds: [],
   blocked: [],
@@ -52,7 +54,8 @@ function normalizeAllowRule(rule) {
       match: 'prefix',
       types: getTypeDefaults(),
       playwright: false,
-      allow_http: false
+      allow_http: false,
+      auth_profile: null
     };
   }
   if (typeof rule === 'string') {
@@ -61,7 +64,8 @@ function normalizeAllowRule(rule) {
       match: 'prefix',
       types: getTypeDefaults(),
       playwright: false,
-      allow_http: false
+      allow_http: false,
+      auth_profile: null
     };
   }
   return {
@@ -69,7 +73,8 @@ function normalizeAllowRule(rule) {
     match: rule.match || 'prefix',
     types: normalizeTypes(rule.types),
     playwright: Boolean(rule.playwright),
-    allow_http: Boolean(rule.allow_http)
+    allow_http: Boolean(rule.allow_http),
+    auth_profile: rule.auth_profile || rule.authProfile || null
   };
 }
 
@@ -317,6 +322,8 @@ function renderAllowTable() {
   header.innerHTML = `
     <div>URL</div>
     <div>Match</div>
+    <div>Auth</div>
+    <div>Auth Profile</div>
     <div>Web</div>
     <div>PDF</div>
     <div>DOCX</div>
@@ -356,6 +363,41 @@ function renderAllowTable() {
       badge.className = 'match-badge';
       badge.textContent = rule.match || 'prefix';
       matchCell = badge;
+    }
+
+    const authHint = getAuthHintForRule(rule);
+    const authCell = document.createElement('div');
+    if (authHint) {
+      const badge = document.createElement('span');
+      badge.className = 'auth-hint';
+      badge.textContent = '🔒 Auth likely';
+      badge.title = authHint.tooltip || 'Crawl attempts redirected to login.';
+      authCell.appendChild(badge);
+    }
+
+    let authProfileCell;
+    if (editState.allow === index) {
+      const select = document.createElement('select');
+      const noneOption = document.createElement('option');
+      noneOption.value = '';
+      noneOption.textContent = 'None';
+      select.appendChild(noneOption);
+      authProfiles.forEach((name) => {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        select.appendChild(option);
+      });
+      select.value = rule.auth_profile || '';
+      select.addEventListener('change', () => {
+        rule.auth_profile = select.value || null;
+      });
+      authProfileCell = select;
+    } else {
+      const label = document.createElement('span');
+      label.className = 'auth-profile-label';
+      label.textContent = rule.auth_profile || 'None';
+      authProfileCell = label;
     }
 
     const checkboxes = allowTypeKeys.map((key) => {
@@ -431,7 +473,16 @@ function renderAllowTable() {
       }
     });
 
-    row.append(urlCell, matchCell, ...checkboxes, allowHttpCell, edit, remove);
+    row.append(
+      urlCell,
+      matchCell,
+      authCell,
+      authProfileCell,
+      ...checkboxes,
+      allowHttpCell,
+      edit,
+      remove
+    );
     table.appendChild(row);
   });
 }
@@ -485,7 +536,8 @@ function renderRecommendations() {
           match: 'prefix',
           types,
           playwright: false,
-          allow_http: false
+          allow_http: false,
+          auth_profile: null
         });
         renderAllowTable();
         renderRecommendations();
@@ -512,6 +564,43 @@ function renderCrawlUi() {
   renderBlockedList();
   renderAllowTable();
   renderRecommendations();
+}
+
+function getRuleHost(pattern) {
+  let host = '';
+  try {
+    host = new URL(pattern).hostname;
+  } catch (error) {
+    const stripped = pattern.replace(/^https?:\/\//, '');
+    host = stripped.split('/')[0];
+  }
+  return host;
+}
+
+function ruleMatchesUrl(rule, url) {
+  if (!rule || !url) return false;
+  if (rule.match === 'exact') {
+    return rule.pattern === url;
+  }
+  return url.startsWith(rule.pattern);
+}
+
+function getAuthHintForRule(rule) {
+  const recentHints = authHints?.recent || [];
+  const matchHint = recentHints.find((hint) => ruleMatchesUrl(rule, hint.original_url || ''));
+  if (matchHint) {
+    return {
+      tooltip: `Crawl attempts redirected to login (${matchHint.redirect_host || 'auth host'}).`
+    };
+  }
+  const host = getRuleHost(rule.pattern || '');
+  if (host && authHints?.by_domain?.[host]) {
+    const domainHint = authHints.by_domain[host];
+    return {
+      tooltip: `Crawl attempts redirected to login (${domainHint.redirect_host || 'auth host'}).`
+    };
+  }
+  return null;
 }
 
 function extractAllowedDomains(rules) {
@@ -664,9 +753,12 @@ async function loadConfigs() {
   const crawler = await fetch(`${API_BASE}/api/admin/config/crawler`).then((r) => r.json());
   cachedCrawlerConfig = crawler || {};
   const playwright = cachedCrawlerConfig.playwright || {};
+  authProfiles = Object.keys(playwright.auth_profiles || {});
   document.getElementById('playwrightEnabled').checked = Boolean(playwright.enabled);
   document.getElementById('playwrightStorageStatePath').value = playwright.storage_state_path || '';
   document.getElementById('playwrightUseDomains').value = (playwright.use_for_domains || []).join('\n');
+  await loadAuthHints();
+  renderAllowTable();
 }
 
 async function loadRecommendations() {
@@ -686,6 +778,19 @@ async function loadRecommendations() {
   }
 }
 
+async function loadAuthHints() {
+  try {
+    const response = await fetch(`${API_BASE}/api/admin/crawl/auth_hints`);
+    if (!response.ok) {
+      authHints = { by_domain: {}, recent: [] };
+      return;
+    }
+    authHints = await response.json();
+  } catch (error) {
+    authHints = { by_domain: {}, recent: [] };
+  }
+}
+
 async function saveCrawlConfig() {
   const allowPayload = {
     seed_urls: crawlState.seeds.map((seed) => {
@@ -701,17 +806,23 @@ async function saveCrawlConfig() {
       match: rule.match || 'prefix',
       types: normalizeTypes(rule.types),
       playwright: Boolean(rule.playwright),
-      allow_http: Boolean(rule.allow_http)
+      allow_http: Boolean(rule.allow_http),
+      auth_profile: rule.auth_profile || null
     })),
     allowed_domains: extractAllowedDomains(crawlState.allowRules)
   };
   const existingPlaywright = cachedCrawlerConfig.playwright || {};
   const playwrightPayload = {
     ...existingPlaywright,
-    enabled: document.getElementById('playwrightEnabled').checked,
-    storage_state_path: document.getElementById('playwrightStorageStatePath').value.trim(),
-    use_for_domains: document.getElementById('playwrightUseDomains').value.split('\n').filter(Boolean)
+    enabled: document.getElementById('playwrightEnabled').checked
   };
+  if (!existingPlaywright.auth_profiles) {
+    playwrightPayload.storage_state_path = document.getElementById('playwrightStorageStatePath').value.trim();
+    playwrightPayload.use_for_domains = document
+      .getElementById('playwrightUseDomains')
+      .value.split('\n')
+      .filter(Boolean);
+  }
   if (playwrightPayload.headless === undefined) {
     playwrightPayload.headless = true;
   }
@@ -796,7 +907,8 @@ function addAllowFromInput() {
       match: match.value,
       types,
       playwright: false,
-      allow_http: allowHttp
+      allow_http: allowHttp,
+      auth_profile: null
     });
     input.value = '';
     if (allowHttpCheckbox) allowHttpCheckbox.checked = false;
@@ -959,6 +1071,8 @@ async function loadCrawlSummary(jobId) {
       pillSummary.innerHTML = pillHtml;
       pillSummary.style.display = 'flex';
     }
+    await loadAuthHints();
+    renderAllowTable();
   } catch (error) {
     summaryPanel.style.display = 'none';
     const pillSummary = document.getElementById('crawlPillSummary');

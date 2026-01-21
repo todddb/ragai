@@ -21,6 +21,7 @@ SECRETS_PATH = Path("/app/secrets/admin_tokens")
 CONFIG_DIR = Path("/app/config")
 CANDIDATES_PATH = Path("/app/data/candidates/candidates.jsonl")
 PROCESSED_PATH = Path("/app/data/candidates/processed.json")
+AUTH_HINTS_PATH = Path("/app/data/logs/auth_hints.json")
 
 
 def _load_tokens() -> List[str]:
@@ -130,6 +131,16 @@ async def purge_candidates() -> Dict[str, str]:
         return {"status": "ok"}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/crawl/auth_hints")
+async def get_auth_hints() -> Dict[str, Any]:
+    if not AUTH_HINTS_PATH.exists():
+        return {"by_domain": {}, "recent": []}
+    try:
+        return json.loads(AUTH_HINTS_PATH.read_text(encoding="utf-8")) or {"by_domain": {}, "recent": []}
+    except json.JSONDecodeError:
+        return {"by_domain": {}, "recent": []}
 
 
 @router.post("/crawl")
