@@ -19,6 +19,7 @@ playwright:
       use_for_domains: []
     policy_cas:
       storage_state_path: secrets/playwright/policy-byu-storageState.json
+      test_url: https://policy.byu.edu/view/business-gifts-and-entertainment-policy
       use_for_domains:
       - policy.byu.edu
   navigation_timeout_ms: 60000

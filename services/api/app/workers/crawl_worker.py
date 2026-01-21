@@ -10,6 +10,7 @@ import httpx
 import yaml
 
 from app.utils.auth_hints import record_auth_hint
+from app.utils.auth_validation import collect_required_profiles, run_auth_checks
 try:
     import tiktoken  # type: ignore
 except Exception:
@@ -315,6 +316,24 @@ def run_crawl_job(log, job_id: str = None) -> None:
     allow_block = _load_allow_block()
     crawler_config = _load_crawler_config()
     max_depth = crawler_config.get("max_depth", 0)
+    required_profiles = collect_required_profiles(crawler_config, allow_block)
+    if required_profiles:
+        log(f"Validating {len(required_profiles)} auth profile(s) before crawl")
+        results = run_auth_checks(required_profiles.keys())
+        invalid_profiles = [
+            result for result in results.values() if not result.get("ok")
+        ]
+        if invalid_profiles:
+            for result in invalid_profiles:
+                log(
+                    f"Auth profile '{result.get('profile_name')}' invalid: {result.get('error_reason')}"
+                )
+            first_failure = invalid_profiles[0]
+            profile_name = first_failure.get("profile_name")
+            reason = first_failure.get("error_reason") or "auth validation failed"
+            raise RuntimeError(
+                f"Auth profile '{profile_name}' is invalid ({reason}). Refresh token and retry."
+            )
 
     # Extract seeds and normalize to URL strings
     raw_seeds = allow_block.get("seed_urls", [])
