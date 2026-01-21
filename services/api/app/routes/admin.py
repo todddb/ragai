@@ -1,5 +1,6 @@
 import asyncio
 import json
+import uuid
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List
 from urllib.parse import urlparse
@@ -58,6 +59,198 @@ async def update_config(name: str, payload: Dict[str, Any]) -> Dict[str, str]:
     path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     refresh_config(name)
     return {"status": "ok"}
+
+
+def _derive_allowed_domains(allow_rules: List[Dict[str, Any]]) -> List[str]:
+    """Derive allowed_domains from allow_rules patterns."""
+    domains = set()
+    for rule in allow_rules:
+        pattern = rule.get("pattern", "")
+        try:
+            parsed = urlparse(pattern)
+            if parsed.netloc:
+                domains.add(parsed.netloc)
+        except Exception:
+            continue
+    return sorted(domains)
+
+
+def _ensure_rule_id(rule: Dict[str, Any]) -> str:
+    """Ensure a rule has an ID, generating one if missing."""
+    if "id" not in rule or not rule["id"]:
+        rule["id"] = str(uuid.uuid4())
+    return rule["id"]
+
+
+@router.post("/allowed-urls")
+async def create_allowed_url(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a new allowed URL rule."""
+    # Validate required fields
+    if "pattern" not in payload or not payload["pattern"]:
+        raise HTTPException(status_code=400, detail="Missing required field: pattern")
+
+    # Set defaults
+    rule = {
+        "id": str(uuid.uuid4()),
+        "pattern": payload["pattern"],
+        "match": payload.get("match", "prefix"),
+        "types": payload.get("types", {
+            "web": True,
+            "pdf": False,
+            "docx": False,
+            "xlsx": False,
+            "pptx": False,
+        }),
+        "playwright": payload.get("playwright", False),
+        "allow_http": payload.get("allow_http", False),
+        "auth_profile": payload.get("auth_profile"),
+    }
+
+    # Validate match type
+    if rule["match"] not in ["prefix", "exact"]:
+        raise HTTPException(status_code=400, detail="Invalid match type (must be 'prefix' or 'exact')")
+
+    # Load current config
+    path = CONFIG_DIR / "allow_block.yml"
+    config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+    # Ensure allow_rules exists
+    if "allow_rules" not in config:
+        config["allow_rules"] = []
+
+    # Ensure existing rules have IDs
+    for existing_rule in config["allow_rules"]:
+        _ensure_rule_id(existing_rule)
+
+    # Add new rule
+    config["allow_rules"].append(rule)
+
+    # Update allowed_domains
+    config["allowed_domains"] = _derive_allowed_domains(config["allow_rules"])
+
+    # Save config
+    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    refresh_config("allow_block")
+
+    return rule
+
+
+@router.put("/allowed-urls/{rule_id}")
+async def update_allowed_url(rule_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Update an existing allowed URL rule."""
+    # Load current config
+    path = CONFIG_DIR / "allow_block.yml"
+    config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+    if "allow_rules" not in config:
+        raise HTTPException(status_code=404, detail="No allow rules found")
+
+    # Ensure existing rules have IDs
+    for existing_rule in config["allow_rules"]:
+        _ensure_rule_id(existing_rule)
+
+    # Find the rule to update
+    rule_index = None
+    for i, rule in enumerate(config["allow_rules"]):
+        if rule.get("id") == rule_id:
+            rule_index = i
+            break
+
+    if rule_index is None:
+        raise HTTPException(status_code=404, detail="Rule not found")
+
+    # Update the rule
+    updated_rule = {
+        "id": rule_id,
+        "pattern": payload.get("pattern", config["allow_rules"][rule_index].get("pattern")),
+        "match": payload.get("match", config["allow_rules"][rule_index].get("match", "prefix")),
+        "types": payload.get("types", config["allow_rules"][rule_index].get("types", {})),
+        "playwright": payload.get("playwright", config["allow_rules"][rule_index].get("playwright", False)),
+        "allow_http": payload.get("allow_http", config["allow_rules"][rule_index].get("allow_http", False)),
+        "auth_profile": payload.get("auth_profile", config["allow_rules"][rule_index].get("auth_profile")),
+    }
+
+    # Validate match type
+    if updated_rule["match"] not in ["prefix", "exact"]:
+        raise HTTPException(status_code=400, detail="Invalid match type (must be 'prefix' or 'exact')")
+
+    # Validate pattern
+    if not updated_rule["pattern"]:
+        raise HTTPException(status_code=400, detail="Pattern cannot be empty")
+
+    # Update the rule in config
+    config["allow_rules"][rule_index] = updated_rule
+
+    # Update allowed_domains
+    config["allowed_domains"] = _derive_allowed_domains(config["allow_rules"])
+
+    # Save config
+    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    refresh_config("allow_block")
+
+    return updated_rule
+
+
+@router.delete("/allowed-urls/{rule_id}")
+async def delete_allowed_url(rule_id: str) -> Dict[str, str]:
+    """Delete an allowed URL rule."""
+    # Load current config
+    path = CONFIG_DIR / "allow_block.yml"
+    config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+    if "allow_rules" not in config:
+        raise HTTPException(status_code=404, detail="No allow rules found")
+
+    # Ensure existing rules have IDs
+    for existing_rule in config["allow_rules"]:
+        _ensure_rule_id(existing_rule)
+
+    # Find and remove the rule
+    original_count = len(config["allow_rules"])
+    config["allow_rules"] = [rule for rule in config["allow_rules"] if rule.get("id") != rule_id]
+
+    if len(config["allow_rules"]) == original_count:
+        raise HTTPException(status_code=404, detail="Rule not found")
+
+    # Update allowed_domains
+    config["allowed_domains"] = _derive_allowed_domains(config["allow_rules"])
+
+    # Save config
+    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    refresh_config("allow_block")
+
+    return {"status": "ok"}
+
+
+@router.put("/playwright-settings")
+async def update_playwright_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Update Playwright settings (enabled flag and auth profiles)."""
+    # Load current crawler config
+    path = CONFIG_DIR / "crawler.yml"
+    config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+    # Ensure playwright section exists
+    if "playwright" not in config:
+        config["playwright"] = {}
+
+    # Update enabled flag if provided
+    if "enabled" in payload:
+        config["playwright"]["enabled"] = bool(payload["enabled"])
+
+    # Update auth_profiles if provided
+    if "auth_profiles" in payload:
+        config["playwright"]["auth_profiles"] = payload["auth_profiles"]
+
+    # Preserve other playwright settings
+    for key in ["headless", "navigation_timeout_ms"]:
+        if key not in config["playwright"] and key in payload:
+            config["playwright"][key] = payload[key]
+
+    # Save config
+    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    refresh_config("crawler")
+
+    return config["playwright"]
 
 
 @router.get("/candidates/recommendations")
