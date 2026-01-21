@@ -37,8 +37,21 @@ def upsert_vectors(
     ids: List[str],
     vectors: List[List[float]],
     payloads: List[dict],
+    batch_size: int = 100,
 ) -> None:
-    client.upsert(
-        collection_name=collection,
-        points=rest.Batch(ids=ids, vectors=vectors, payloads=payloads),
-    )
+    """
+    Upsert points into Qdrant in batches to avoid huge JSON payloads.
+    batch_size can be tuned (100 is a safe default).
+    """
+    if not (len(ids) == len(vectors) == len(payloads)):
+        raise ValueError("ids, vectors and payloads must have equal length")
+
+    # Iterate in batches
+    for i in range(0, len(ids), batch_size):
+        batch_ids = ids[i : i + batch_size]
+        batch_vectors = vectors[i : i + batch_size]
+        batch_payloads = payloads[i : i + batch_size]
+        client.upsert(
+            collection_name=collection,
+            points=rest.Batch(ids=batch_ids, vectors=batch_vectors, payloads=batch_payloads),
+        )
