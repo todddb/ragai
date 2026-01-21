@@ -371,8 +371,9 @@ function renderAllowTable() {
     if (authHint) {
       const badge = document.createElement('span');
       badge.className = 'auth-hint';
-      badge.textContent = '🔒 Auth likely';
-      badge.title = authHint.tooltip || 'Crawl attempts redirected to login.';
+      badge.textContent = '🔒';
+      badge.title = authHint.tooltip || 'Auth likely: Crawl attempts redirected to login.';
+      badge.style.cursor = 'help';
       authCell.appendChild(badge);
     }
 
@@ -743,6 +744,14 @@ function showAuthProfileEditor(profileName = null) {
     pathInput.value = '';
     domainsInput.value = '';
     editState.authProfile = null;
+
+    // Auto-update path suggestion when name changes
+    nameInput.addEventListener('input', function updatePathSuggestion() {
+      const name = nameInput.value.trim();
+      if (name && !pathInput.value) {
+        pathInput.placeholder = `secrets/playwright/${name}-storageState.json`;
+      }
+    });
   }
 
   editor.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -1452,14 +1461,95 @@ async function deleteCurrentLog(jobId, statusTarget, streamKey, logTargetId) {
 }
 
 async function clearVectors() {
-  if (!confirm('Clear all vectors and ingest metadata? This cannot be undone.')) {
+  const confirmed = prompt(
+    'This will delete ALL vectors from Qdrant and reset the ingest metadata database.\n\n' +
+    'The following will be deleted:\n' +
+    '• All vectors in the Qdrant collection\n' +
+    '• Ingest metadata.db (documents and chunks tables)\n\n' +
+    'Type DELETE to confirm:'
+  );
+
+  if (confirmed !== 'DELETE') {
     return;
   }
-  const response = await fetch(`${API_BASE}/api/admin/clear_vectors`, { method: 'POST' });
-  if (response.ok) {
-    setStatus('clearVectorsStatus', 'Cleared');
-  } else {
-    setStatus('clearVectorsStatus', 'Error clearing vectors', 'error');
+
+  const statusTarget = 'clearVectorsStatus';
+  setStatus(statusTarget, 'Clearing vectors...');
+
+  try {
+    const response = await fetch(`${API_BASE}/api/admin/clear_vectors`, { method: 'POST' });
+    if (response.ok) {
+      const result = await response.json();
+      const deletedItems = result.deleted || [];
+      setStatus(statusTarget, `Cleared: ${deletedItems.join(', ')}`, 'success');
+    } else {
+      setStatus(statusTarget, 'Error clearing vectors', 'error');
+    }
+  } catch (error) {
+    setStatus(statusTarget, `Error: ${error.message}`, 'error');
+  }
+}
+
+async function resetCrawl() {
+  const confirmed = prompt(
+    'This will delete ALL crawl state including artifacts, candidates, and logs.\n\n' +
+    'The following will be deleted:\n' +
+    '• data/artifacts/* (all crawled content)\n' +
+    '• data/candidates/* (URL discovery cache)\n' +
+    '• data/logs/jobs/* (crawl job logs)\n' +
+    '• data/logs/summaries/* (crawl summaries)\n\n' +
+    'Type DELETE to confirm:'
+  );
+
+  if (confirmed !== 'DELETE') {
+    return;
+  }
+
+  const statusTarget = 'resetCrawlStatus';
+  setStatus(statusTarget, 'Resetting crawl state...');
+
+  try {
+    const response = await fetch(`${API_BASE}/api/admin/reset_crawl`, { method: 'POST' });
+    if (response.ok) {
+      const result = await response.json();
+      const deletedItems = result.deleted || [];
+      setStatus(statusTarget, `Reset complete: ${deletedItems.join(', ')}`, 'success');
+    } else {
+      setStatus(statusTarget, 'Error resetting crawl state', 'error');
+    }
+  } catch (error) {
+    setStatus(statusTarget, `Error: ${error.message}`, 'error');
+  }
+}
+
+async function resetIngest() {
+  const confirmed = prompt(
+    'This will delete the ingest metadata database.\n\n' +
+    'The following will be deleted:\n' +
+    '• data/ingest/metadata.db (documents and chunks tables)\n\n' +
+    'Note: This does NOT delete vectors from Qdrant.\n' +
+    'Use "Clear Vector DB" to also remove vectors.\n\n' +
+    'Type DELETE to confirm:'
+  );
+
+  if (confirmed !== 'DELETE') {
+    return;
+  }
+
+  const statusTarget = 'resetIngestStatus';
+  setStatus(statusTarget, 'Resetting ingest state...');
+
+  try {
+    const response = await fetch(`${API_BASE}/api/admin/reset_ingest`, { method: 'POST' });
+    if (response.ok) {
+      const result = await response.json();
+      const deletedItems = result.deleted || [];
+      setStatus(statusTarget, `Reset complete: ${deletedItems.join(', ')}`, 'success');
+    } else {
+      setStatus(statusTarget, 'Error resetting ingest state', 'error');
+    }
+  } catch (error) {
+    setStatus(statusTarget, `Error: ${error.message}`, 'error');
   }
 }
 
@@ -1530,7 +1620,10 @@ document.getElementById('deleteIngestLog').addEventListener('click', () => {
   currentIngestJobId = null;
 });
 
-document.getElementById('clearVectors').addEventListener('click', clearVectors);
+document.getElementById('clearVectors')?.addEventListener('click', clearVectors);
+document.getElementById('clearVectorsNew')?.addEventListener('click', clearVectors);
+document.getElementById('resetCrawl')?.addEventListener('click', resetCrawl);
+document.getElementById('resetIngest')?.addEventListener('click', resetIngest);
 
 document.getElementById('exportJobLog').addEventListener('click', () => {
   exportCurrentLog(currentJobLogId, 'jobLogStatus');

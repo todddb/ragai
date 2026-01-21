@@ -995,7 +995,7 @@ html.sidebar-collapsed .sidebar #sidebarToggle {
 
 .allowed-row {
   display: grid;
-  grid-template-columns: 1fr 90px 110px 140px 48px 48px 58px 58px 58px 90px 36px 36px;
+  grid-template-columns: 2fr 80px 50px 120px 48px 48px 58px 58px 58px 80px 36px 36px;
   gap: 8px;
   align-items: center;
   padding: 6px 0;
@@ -1051,14 +1051,17 @@ html.sidebar-collapsed .sidebar #sidebarToggle {
 .auth-hint {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
-  padding: 2px 6px;
+  padding: 4px;
   border-radius: var(--radius-full);
   border: 1px solid rgba(148, 163, 184, 0.6);
   background: #fff7ed;
   color: #9a3412;
-  font-size: 0.7rem;
+  font-size: 0.9rem;
   white-space: nowrap;
+  min-width: 24px;
+  min-height: 24px;
 }
 
 .auth-profile-label {
