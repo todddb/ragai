@@ -1,4 +1,5 @@
 import json
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
@@ -111,7 +112,8 @@ def ingest() -> None:
 
             texts = [chunk["text"] for chunk in filtered_chunks]
             vectors = _load_embeddings(texts, ollama_host, embedding_model)
-            ids = [chunk["chunk_id"] for chunk in filtered_chunks]
+            # ids = [chunk["chunk_id"] for chunk in filtered_chunks]   <-- This was breaking
+            ids = [str(uuid.uuid5(uuid.NAMESPACE_URL, chunk["chunk_id"])) for chunk in filtered_chunks]
             payloads = [
                 {
                     "doc_id": doc_id,
@@ -138,12 +140,13 @@ def ingest() -> None:
                 "INSERT INTO chunks (chunk_id, doc_id, chunk_index, vector_id) VALUES (?, ?, ?, ?)",
                 [
                     (
-                        chunk["chunk_id"],
-                        doc_id,
-                        chunk["chunk_index"],
-                        chunk["chunk_id"],
+                         chunk["chunk_id"],
+                         doc_id,
+                         chunk["chunk_index"],
+                         chunk["chunk_id"],
                     )
                     for chunk in filtered_chunks
-                ],
+                 ],
             )
+
         conn.commit()
