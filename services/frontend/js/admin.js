@@ -314,6 +314,113 @@ function renderBlockedList() {
   });
 }
 
+// Per-row save/delete functions for allowed URLs
+async function saveAllowedUrlRow(rule, statusElement) {
+  if (!statusElement) return;
+
+  // Show saving status
+  statusElement.textContent = '⏳';
+  statusElement.title = 'Saving...';
+  statusElement.className = 'row-status saving';
+
+  try {
+    const payload = {
+      pattern: rule.pattern,
+      match: rule.match || 'prefix',
+      types: rule.types || {},
+      playwright: rule.playwright || false,
+      allow_http: rule.allow_http || false,
+      auth_profile: rule.auth_profile || null
+    };
+
+    let response;
+    if (rule.id) {
+      // Update existing rule
+      response = await fetch(`${API_BASE}/api/admin/allowed-urls/${rule.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    } else {
+      // Create new rule
+      response = await fetch(`${API_BASE}/api/admin/allowed-urls`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    }
+
+    if (response.ok) {
+      const savedRule = await response.json();
+      // Update the rule with the ID from the server
+      rule.id = savedRule.id;
+
+      // Show success
+      statusElement.textContent = '✓';
+      statusElement.title = 'Saved';
+      statusElement.className = 'row-status saved';
+
+      // Clear success status after 2 seconds
+      setTimeout(() => {
+        statusElement.textContent = '';
+        statusElement.title = '';
+        statusElement.className = 'row-status';
+      }, 2000);
+
+      return true;
+    } else {
+      const error = await response.text();
+      statusElement.textContent = '✗';
+      statusElement.title = `Error: ${error}`;
+      statusElement.className = 'row-status error';
+      return false;
+    }
+  } catch (e) {
+    statusElement.textContent = '✗';
+    statusElement.title = `Error: ${e.message}`;
+    statusElement.className = 'row-status error';
+    return false;
+  }
+}
+
+async function deleteAllowedUrlRow(rule, statusElement) {
+  if (!rule.id) {
+    // If no ID, just remove from local state
+    return true;
+  }
+
+  if (statusElement) {
+    statusElement.textContent = '⏳';
+    statusElement.title = 'Deleting...';
+    statusElement.className = 'row-status saving';
+  }
+
+  try {
+    const response = await fetch(`${API_BASE}/api/admin/allowed-urls/${rule.id}`, {
+      method: 'DELETE'
+    });
+
+    if (response.ok) {
+      return true;
+    } else {
+      const error = await response.text();
+      if (statusElement) {
+        statusElement.textContent = '✗';
+        statusElement.title = `Error: ${error}`;
+        statusElement.className = 'row-status error';
+      }
+      return false;
+    }
+  } catch (e) {
+    if (statusElement) {
+      statusElement.textContent = '✗';
+      statusElement.title = `Error: ${e.message}`;
+      statusElement.className = 'row-status error';
+    }
+    return false;
+  }
+}
+
 function renderAllowTable() {
   const table = document.getElementById('allowTable');
   if (!table) return;
@@ -331,6 +438,7 @@ function renderAllowTable() {
     <div>XLSX</div>
     <div>PPTX</div>
     <div>Allow HTTP</div>
+    <div></div>
     <div></div>
     <div></div>
   `;
@@ -432,6 +540,9 @@ function renderAllowTable() {
     });
     allowHttpCell.appendChild(allowHttpCheckbox);
 
+    const statusCell = document.createElement('div');
+    statusCell.className = 'row-status';
+
     const edit = document.createElement('button');
     edit.className = 'icon-btn';
     edit.setAttribute('aria-label', 'Edit allowed URL');
@@ -441,7 +552,7 @@ function renderAllowTable() {
     remove.setAttribute('aria-label', 'Delete allowed URL');
     remove.textContent = editState.allow === index ? '✖️' : '🗑️';
 
-    edit.addEventListener('click', () => {
+    edit.addEventListener('click', async () => {
       if (editState.allow === index) {
         const input = urlCell.querySelector('input');
         try {
@@ -456,22 +567,33 @@ function renderAllowTable() {
         if (matchCell instanceof HTMLSelectElement) {
           rule.match = matchCell.value;
         }
-        editState.allow = null;
+
+        // Save the row immediately
+        const success = await saveAllowedUrlRow(rule, statusCell);
+        if (success) {
+          editState.allow = null;
+          renderAllowTable();
+          renderRecommendations();
+        }
       } else {
         editState.allow = index;
+        renderAllowTable();
+        renderRecommendations();
       }
-      renderAllowTable();
-      renderRecommendations();
     });
 
-    remove.addEventListener('click', () => {
+    remove.addEventListener('click', async () => {
       if (editState.allow === index) {
         editState.allow = null;
         renderAllowTable();
       } else {
-        crawlState.allowRules.splice(index, 1);
-        renderAllowTable();
-        renderRecommendations();
+        // Delete the row from backend first
+        const success = await deleteAllowedUrlRow(rule, statusCell);
+        if (success) {
+          crawlState.allowRules.splice(index, 1);
+          renderAllowTable();
+          renderRecommendations();
+        }
       }
     });
 
@@ -482,6 +604,7 @@ function renderAllowTable() {
       authProfileCell,
       ...checkboxes,
       allowHttpCell,
+      statusCell,
       edit,
       remove
     );
@@ -773,7 +896,7 @@ function startEditAuthProfile(profileName) {
   showAuthProfileEditor(profileName);
 }
 
-function saveAuthProfile() {
+async function saveAuthProfile() {
   const nameInput = document.getElementById('profileName');
   const pathInput = document.getElementById('profileStoragePath');
   const domainsInput = document.getElementById('profileUseDomains');
@@ -820,13 +943,33 @@ function saveAuthProfile() {
   // Update authProfiles array
   authProfiles = Object.keys(cachedCrawlerConfig.playwright.auth_profiles);
 
-  hideAuthProfileEditor();
-  renderAuthProfilesList();
-  renderAllowTable();
-  setStatus('profileEditorStatus', 'Profile saved (remember to click Save above to persist)', 'success');
+  // Save to backend immediately
+  setStatus('profileEditorStatus', 'Saving...', 'info');
+  try {
+    const response = await fetch(`${API_BASE}/api/admin/playwright-settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        enabled: cachedCrawlerConfig.playwright.enabled,
+        auth_profiles: cachedCrawlerConfig.playwright.auth_profiles
+      })
+    });
+
+    if (response.ok) {
+      hideAuthProfileEditor();
+      renderAuthProfilesList();
+      renderAllowTable();
+      setStatus('profileEditorStatus', 'Profile saved', 'success');
+    } else {
+      const error = await response.text();
+      setStatus('profileEditorStatus', `Error saving: ${error}`, 'error');
+    }
+  } catch (e) {
+    setStatus('profileEditorStatus', `Error saving: ${e.message}`, 'error');
+  }
 }
 
-function deleteAuthProfile(profileName) {
+async function deleteAuthProfile(profileName) {
   if (!confirm(`Delete auth profile "${profileName}"? This cannot be undone.`)) {
     return;
   }
@@ -837,8 +980,28 @@ function deleteAuthProfile(profileName) {
   if (profiles[profileName]) {
     delete profiles[profileName];
     authProfiles = Object.keys(profiles);
-    renderAuthProfilesList();
-    renderAllowTable();
+
+    // Save to backend immediately
+    try {
+      const response = await fetch(`${API_BASE}/api/admin/playwright-settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enabled: cachedCrawlerConfig.playwright.enabled,
+          auth_profiles: cachedCrawlerConfig.playwright.auth_profiles
+        })
+      });
+
+      if (response.ok) {
+        renderAuthProfilesList();
+        renderAllowTable();
+      } else {
+        const error = await response.text();
+        alert(`Error deleting profile: ${error}`);
+      }
+    } catch (e) {
+      alert(`Error deleting profile: ${e.message}`);
+    }
   }
 }
 
@@ -1079,6 +1242,7 @@ async function saveCrawlConfig() {
     }),
     blocked_domains: crawlState.blocked,
     allow_rules: crawlState.allowRules.map((rule) => ({
+      id: rule.id,
       pattern: rule.pattern,
       match: rule.match || 'prefix',
       types: normalizeTypes(rule.types),
@@ -1161,12 +1325,19 @@ function addBlockedFromInput() {
   renderBlockedList();
 }
 
-function addAllowFromInput() {
+async function addAllowFromInput() {
   const input = document.getElementById('allowAddInput');
   const match = document.getElementById('allowAddMatch');
   const allowHttpCheckbox = document.getElementById('allowAddAllowHttp');
+  const statusElement = document.getElementById('allowAddStatus');
   if (!input || !match) return;
   const allowHttp = allowHttpCheckbox ? allowHttpCheckbox.checked : false;
+
+  if (statusElement) {
+    statusElement.textContent = '⏳ Saving...';
+    statusElement.className = 'row-status saving';
+  }
+
   try {
     const value = normalizeUrlRow(input.value, allowHttp);
     if (!value) return;
@@ -1180,20 +1351,58 @@ function addAllowFromInput() {
     if (!types.web && !types.pdf && !types.docx && !types.xlsx && !types.pptx) {
       types.web = true;
     }
-    crawlState.allowRules.push({
+
+    const newRule = {
       pattern: value,
       match: match.value,
       types,
       playwright: false,
       allow_http: allowHttp,
       auth_profile: null
+    };
+
+    // Save to backend immediately
+    const response = await fetch(`${API_BASE}/api/admin/allowed-urls`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newRule)
     });
-    input.value = '';
-    if (allowHttpCheckbox) allowHttpCheckbox.checked = false;
-    renderAllowTable();
-    renderRecommendations();
+
+    if (response.ok) {
+      const savedRule = await response.json();
+      // Add to local state with ID
+      crawlState.allowRules.push(savedRule);
+
+      // Clear inputs
+      input.value = '';
+      if (allowHttpCheckbox) allowHttpCheckbox.checked = false;
+
+      // Show success
+      if (statusElement) {
+        statusElement.textContent = '✓ Saved';
+        statusElement.className = 'row-status saved';
+        setTimeout(() => {
+          statusElement.textContent = '';
+          statusElement.className = 'row-status';
+        }, 2000);
+      }
+
+      renderAllowTable();
+      renderRecommendations();
+    } else {
+      const error = await response.text();
+      if (statusElement) {
+        statusElement.textContent = `✗ Error: ${error}`;
+        statusElement.className = 'row-status error';
+      }
+    }
   } catch (e) {
-    alert(e.message);
+    if (statusElement) {
+      statusElement.textContent = `✗ Error: ${e.message}`;
+      statusElement.className = 'row-status error';
+    } else {
+      alert(e.message);
+    }
   }
 }
 
@@ -1651,6 +1860,36 @@ document.getElementById('migrateLegacyBtn')?.addEventListener('click', async () 
 });
 
 document.getElementById('saveAuthConfigBtn')?.addEventListener('click', saveCrawlConfig);
+
+// Listen for Playwright enabled toggle and persist immediately
+document.getElementById('playwrightEnabled')?.addEventListener('change', async (event) => {
+  const isEnabled = event.target.checked;
+  cachedCrawlerConfig.playwright = cachedCrawlerConfig.playwright || {};
+  cachedCrawlerConfig.playwright.enabled = isEnabled;
+
+  // Save to backend immediately
+  try {
+    const response = await fetch(`${API_BASE}/api/admin/playwright-settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        enabled: isEnabled,
+        auth_profiles: cachedCrawlerConfig.playwright.auth_profiles || {}
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      alert(`Error saving Playwright setting: ${error}`);
+      // Revert checkbox on error
+      event.target.checked = !isEnabled;
+    }
+  } catch (e) {
+    alert(`Error saving Playwright setting: ${e.message}`);
+    // Revert checkbox on error
+    event.target.checked = !isEnabled;
+  }
+});
 
 document.getElementById('openCaptureInstructions')?.addEventListener('click', (e) => {
   e.preventDefault();
