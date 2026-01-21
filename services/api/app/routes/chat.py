@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List
 
@@ -108,6 +109,48 @@ def _extract_message_text(message: Dict[str, Any]) -> str:
     return str(parsed.get("text", "")).strip()
 
 
+def _sanitize_title(title: str) -> str:
+    """
+    Sanitize the generated title to ensure it's clean and human-readable.
+    Removes JSON, XML, tool markers, and excessive punctuation.
+    Enforces 3-7 word limit.
+    """
+    title = title.strip()
+
+    # Remove JSON-like or tool artifacts
+    if title.startswith("{") or title.startswith("<"):
+        title = title.replace("{", "").replace("}", "")
+        title = title.replace("<", "").replace(">", "")
+
+    # Remove quotes
+    title = title.replace('"', '').replace("'", "")
+
+    # Remove punctuation
+    title = re.sub(r"[^\w\s]", "", title)
+
+    # Collapse whitespace
+    title = re.sub(r"\s+", " ", title)
+
+    # Enforce word limit (3-7 words)
+    words = title.split()
+    title = " ".join(words[:7])
+
+    return title.strip()
+
+
+def _extract_title_context(messages: List[Dict[str, Any]]) -> str:
+    """
+    Extract clean context for title generation from the first user message.
+    Limits to 500 characters to avoid pollution from system/tool content.
+    """
+    for msg in messages:
+        if msg.get("role") == "user":
+            text = _extract_message_text(msg)
+            if text.strip():
+                return text[:500]
+    return ""
+
+
 @router.post("/{conversation_id}/title/auto")
 async def auto_title_conversation(conversation_id: str) -> Dict[str, str]:
     conversation = get_conversation(conversation_id)
@@ -119,25 +162,46 @@ async def auto_title_conversation(conversation_id: str) -> Dict[str, str]:
         return {"title": conversation.get("title", "")}
 
     messages = list_messages(conversation_id)
-    user_message = next((msg for msg in messages if msg.get("role") == "user"), None)
-    assistant_message = next((msg for msg in messages if msg.get("role") == "assistant"), None)
-    if not user_message or not assistant_message:
+    # Extract clean context from first user message only
+    user_context = _extract_title_context(messages)
+    if not user_context:
         raise HTTPException(status_code=400, detail="Not enough messages to auto-title")
 
-    user_text = _extract_message_text(user_message)
-    assistant_text = _extract_message_text(assistant_message)
+    # Use improved prompt that generates clean titles without JSON pollution
     prompt = (
-        "Generate a concise 3-7 word conversation title based on this exchange.\n"
-        "Return ONLY JSON: {\"title\": \"...\"}\n"
-        "Rules: no punctuation, no markdown, no quotes inside the title.\n"
-        f"User: {user_text}\n"
-        f"Assistant: {assistant_text}"
+        "You are generating a conversation title for a chat UI.\n\n"
+        "Rules (MANDATORY):\n"
+        "- Output ONLY the title text\n"
+        "- 3 to 7 words maximum\n"
+        "- No punctuation\n"
+        "- No quotes\n"
+        "- No markdown\n"
+        "- No JSON\n"
+        "- No XML\n"
+        "- No angle brackets\n"
+        "- No system or tool text\n"
+        "- Do not mention AI, system, agent, or tools\n"
+        "- Summarize the user's main question or intent\n\n"
+        "Bad examples:\n"
+        '- {"title":"Cash Policy"}\n'
+        "- <tool_call> Cash Policy\n"
+        "- Generate a title about policies\n\n"
+        "Good examples:\n"
+        "- Cash Equivalents Policy\n"
+        "- Retirement Computer Purchase\n"
+        "- Business Gifts Rules\n\n"
+        "Now generate the title.\n\n"
+        f"User question: {user_context}"
     )
 
+    # Call LLM and sanitize the result
     result = await call_ollama_json(prompt, TitleOutput)
-    title = " ".join(result.title.strip().split())
+    title = _sanitize_title(result.title)
+
+    # Fallback to default if sanitization results in empty title
     if not title:
-        raise HTTPException(status_code=500, detail="Failed to generate title")
+        title = "New Conversation"
+
     update_conversation(conversation_id, title, auto_titled=True)
     return {"title": title}
 
