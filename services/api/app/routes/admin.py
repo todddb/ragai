@@ -133,6 +133,72 @@ async def purge_candidates() -> Dict[str, str]:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.post("/reset_crawl")
+async def reset_crawl() -> Dict[str, Any]:
+    """Reset crawl state by deleting artifacts, candidates, and job logs."""
+    import shutil
+    deleted_items = []
+
+    # Delete artifacts
+    artifacts_path = Path("/app/data/artifacts")
+    if artifacts_path.exists():
+        artifact_count = len(list(artifacts_path.glob("*/artifact.json")))
+        shutil.rmtree(artifacts_path)
+        artifacts_path.mkdir(parents=True, exist_ok=True)
+        deleted_items.append(f"{artifact_count} artifacts")
+
+    # Delete candidates
+    if CANDIDATES_PATH.exists():
+        CANDIDATES_PATH.unlink()
+        deleted_items.append("candidates.jsonl")
+
+    if PROCESSED_PATH.exists():
+        PROCESSED_PATH.unlink()
+        deleted_items.append("processed.json")
+
+    # Delete job logs
+    job_logs_path = Path("/app/data/logs/jobs")
+    if job_logs_path.exists():
+        log_count = len(list(job_logs_path.glob("*.log")))
+        shutil.rmtree(job_logs_path)
+        job_logs_path.mkdir(parents=True, exist_ok=True)
+        deleted_items.append(f"{log_count} job logs")
+
+    # Delete summaries
+    summaries_path = Path("/app/data/logs/summaries")
+    if summaries_path.exists():
+        summary_count = len(list(summaries_path.glob("*.json")))
+        shutil.rmtree(summaries_path)
+        summaries_path.mkdir(parents=True, exist_ok=True)
+        deleted_items.append(f"{summary_count} summaries")
+
+    return {"status": "ok", "deleted": deleted_items}
+
+
+@router.post("/reset_ingest")
+async def reset_ingest() -> Dict[str, Any]:
+    """Reset ingest state by deleting metadata database."""
+    import sqlite3
+    deleted_items = []
+
+    if DB_PATH.exists():
+        # Count records before deleting
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            doc_count = cursor.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+            chunk_count = cursor.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+            conn.close()
+            deleted_items.append(f"{doc_count} documents")
+            deleted_items.append(f"{chunk_count} chunks")
+        except Exception:
+            deleted_items.append("metadata.db (corrupted or empty)")
+
+        DB_PATH.unlink()
+
+    return {"status": "ok", "deleted": deleted_items}
+
+
 @router.get("/crawl/auth_hints")
 async def get_auth_hints() -> Dict[str, Any]:
     if not AUTH_HINTS_PATH.exists():
@@ -212,7 +278,7 @@ async def remove_job(job_id: str) -> Dict[str, str]:
 
 
 @router.post("/clear_vectors")
-async def clear_vectors() -> Dict[str, str]:
+async def clear_vectors() -> Dict[str, Any]:
     system_config = yaml.safe_load((CONFIG_DIR / "system.yml").read_text(encoding="utf-8")) or {}
     qdrant_config = system_config.get("qdrant", {})
     ollama_config = system_config.get("ollama", {})
@@ -228,11 +294,15 @@ async def clear_vectors() -> Dict[str, str]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error connecting to Qdrant: {e}")
 
+    deleted_items = []
+    points_count = 0
+
     vector_size = None
     if any(col.name == collection for col in collections):
         try:
             info = client.get_collection(collection)
             vector_size = info.config.params.vectors.size
+            points_count = info.points_count
         except AttributeError:
             # Handle case where config structure doesn't match expected schema
             print(f"Warning: Could not get vector size for collection '{collection}' due to schema mismatch")
@@ -243,6 +313,7 @@ async def clear_vectors() -> Dict[str, str]:
             else:
                 raise HTTPException(status_code=500, detail=f"Error getting collection info: {e}")
         client.delete_collection(collection_name=collection)
+        deleted_items.append(f"{points_count} vectors from collection '{collection}'")
     if vector_size is None:
         if not embedding_model or not ollama_host:
             raise HTTPException(status_code=400, detail="Missing embedding configuration")
@@ -252,6 +323,10 @@ async def clear_vectors() -> Dict[str, str]:
         vectors_config=rest.VectorParams(size=vector_size, distance=rest.Distance.COSINE),
     )
     client.create_payload_index(collection_name=collection, field_name="doc_id", field_schema="keyword")
+
+    # Also delete ingest metadata
     if DB_PATH.exists():
         DB_PATH.unlink()
-    return {"status": "ok"}
+        deleted_items.append("ingest metadata.db")
+
+    return {"status": "ok", "deleted": deleted_items}

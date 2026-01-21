@@ -239,8 +239,7 @@
               </div>
               <div class="actions-row">
                 <button class="btn btn-primary" id="triggerIngest">Trigger Ingest</button>
-                <button class="btn" id="clearVectors">Clear Vector DB</button>
-                <span id="clearVectorsStatus" class="status-text"></span>
+                <span id="triggerIngestStatus" class="status-text"></span>
               </div>
             </div>
             <div class="log-section">
@@ -298,6 +297,87 @@
             </div>
           </div>
         </section>
+      </div>
+    </section>
+
+    <section class="settings-section">
+      <h2>Data Management</h2>
+      <p class="settings-help">
+        These actions are <strong>destructive</strong> and <strong>cannot be undone</strong>.
+        Each operation requires explicit confirmation by typing DELETE.
+      </p>
+
+      <div class="card-grid" style="margin-top: 1rem;">
+        <div class="panel-card">
+          <h3 style="margin-top: 0; font-size: 1rem;">Reset Crawl State</h3>
+          <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
+            Deletes all crawled artifacts, candidates, job logs, and summaries.
+          </p>
+          <div class="info-grid" style="font-size: 0.75rem; margin-bottom: 1rem;">
+            <div>
+              <div class="field-label">Will delete:</div>
+              <div class="info-value">
+                • data/artifacts/*<br>
+                • data/candidates/*<br>
+                • data/logs/jobs/*<br>
+                • data/logs/summaries/*
+              </div>
+            </div>
+          </div>
+          <div class="actions-row">
+            <button class="btn" id="resetCrawl">Reset Crawl State</button>
+            <span id="resetCrawlStatus" class="status-text"></span>
+          </div>
+        </div>
+
+        <div class="panel-card">
+          <h3 style="margin-top: 0; font-size: 1rem;">Reset Ingest State</h3>
+          <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
+            Deletes the ingest metadata database (documents and chunks tables).
+          </p>
+          <div class="info-grid" style="font-size: 0.75rem; margin-bottom: 1rem;">
+            <div>
+              <div class="field-label">Will delete:</div>
+              <div class="info-value">
+                • data/ingest/metadata.db
+              </div>
+            </div>
+            <div>
+              <div class="field-label">Note:</div>
+              <div class="info-value">
+                Does NOT delete vectors from Qdrant
+              </div>
+            </div>
+          </div>
+          <div class="actions-row">
+            <button class="btn" id="resetIngest">Reset Ingest State</button>
+            <span id="resetIngestStatus" class="status-text"></span>
+          </div>
+        </div>
+
+        <div class="panel-card">
+          <h3 style="margin-top: 0; font-size: 1rem;">Clear Vector Index</h3>
+          <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
+            Deletes the Qdrant collection and ingest metadata database, then recreates an empty collection.
+          </p>
+          <div class="info-grid" style="font-size: 0.75rem; margin-bottom: 1rem;">
+            <div>
+              <div class="field-label">Will delete:</div>
+              <div class="info-value">
+                • All vectors in Qdrant collection<br>
+                • data/ingest/metadata.db
+              </div>
+            </div>
+            <div>
+              <div class="field-label">Collection:</div>
+              <div class="info-value" id="qdrantCollectionName">ragai_chunks</div>
+            </div>
+          </div>
+          <div class="actions-row">
+            <button class="btn" id="clearVectorsNew">Clear Vector Index</button>
+            <span id="clearVectorsStatus" class="status-text"></span>
+          </div>
+        </div>
       </div>
     </section>
 

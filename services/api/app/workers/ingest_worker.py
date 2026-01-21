@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Set
@@ -181,7 +182,8 @@ def run_ingest_job(log, job_id: str = None) -> None:
                 chunks.append(json.loads(line))
             texts = [chunk["text"] for chunk in chunks]
             vectors = _load_embeddings(texts, ollama_host, embedding_model)
-            ids = [chunk["chunk_id"] for chunk in chunks]
+            # Generate deterministic UUID for Qdrant point IDs (not chunk_id strings)
+            ids = [str(uuid.uuid5(uuid.NAMESPACE_URL, chunk["chunk_id"])) for chunk in chunks]
             payloads = [
                 {
                     "doc_id": doc_id,
@@ -192,6 +194,7 @@ def run_ingest_job(log, job_id: str = None) -> None:
                 }
                 for chunk in chunks
             ]
+            assert len(ids) == len(vectors) == len(payloads), (len(ids), len(vectors), len(payloads))
             _upsert_vectors(client, collection, ids, vectors, payloads)
             conn.execute(
                 "INSERT INTO documents (doc_id, url, content_hash, ingested_at, chunk_count) VALUES (?, ?, ?, ?, ?)",
@@ -210,9 +213,9 @@ def run_ingest_job(log, job_id: str = None) -> None:
                         chunk["chunk_id"],
                         doc_id,
                         chunk["chunk_index"],
-                        chunk["chunk_id"],
+                        ids[i],
                     )
-                    for chunk in chunks
+                    for i, chunk in enumerate(chunks)
                 ],
             )
         conn.commit()
