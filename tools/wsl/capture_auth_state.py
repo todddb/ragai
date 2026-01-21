@@ -82,10 +82,10 @@ def main() -> None:
         if not profile_name:
             raise SystemExit("Profile name is required.")
         storage_state_path = input(
-            f"Storage state path (default /app/secrets/playwright/{profile_name}-storageState.json): "
+            f"Storage state path (default secrets/playwright/{profile_name}-storageState.json): "
         ).strip()
         if not storage_state_path:
-            storage_state_path = f"/app/secrets/playwright/{profile_name}-storageState.json"
+            storage_state_path = f"secrets/playwright/{profile_name}-storageState.json"
         domains_raw = input("Use-for domains (comma-separated, optional): ").strip()
         use_for_domains = [d.strip() for d in domains_raw.split(",") if d.strip()]
         auth_profiles[profile_name] = {

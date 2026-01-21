@@ -1,7 +1,166 @@
 seed_urls:
-- https://policy.byu.edu
-allowed_domains:
-- policy.byu.edu
+- url: https://policy.byu.edu/
+  allow_http: false
+- url: https://dmba.com/
+  allow_http: false
 blocked_domains:
 - cas.byu.edu
 - login.byu.edu
+allow_rules:
+- pattern: https://policy.byu.edu/
+  match: prefix
+  types:
+    web: true
+    pdf: true
+    docx: false
+    xlsx: false
+    pptx: false
+  playwright: false
+  allow_http: false
+  auth_profile: null
+- pattern: https://hrs.byu.edu/procedures/
+  match: prefix
+  types:
+    web: true
+    pdf: true
+    docx: false
+    xlsx: false
+    pptx: false
+  playwright: false
+  allow_http: false
+  auth_profile: null
+- pattern: https://incident.byu.edu/forms/
+  match: prefix
+  types:
+    web: true
+    pdf: true
+    docx: true
+    xlsx: false
+    pptx: false
+  playwright: false
+  allow_http: false
+  auth_profile: null
+- pattern: https://risk.byu.edu/fire/
+  match: prefix
+  types:
+    web: true
+    pdf: true
+    docx: false
+    xlsx: false
+    pptx: false
+  playwright: false
+  allow_http: false
+  auth_profile: null
+- pattern: https://housing.byu.edu/secure/
+  match: prefix
+  types:
+    web: true
+    pdf: false
+    docx: false
+    xlsx: false
+    pptx: false
+  playwright: false
+  allow_http: false
+  auth_profile: null
+- pattern: https://compliance.byu.edu/
+  match: prefix
+  types:
+    web: true
+    pdf: false
+    docx: false
+    xlsx: false
+    pptx: false
+  playwright: false
+  allow_http: false
+  auth_profile: null
+- pattern: https://styleguide.byu.edu/brand-guidelines/
+  match: prefix
+  types:
+    web: true
+    pdf: false
+    docx: false
+    xlsx: false
+    pptx: false
+  playwright: false
+  allow_http: false
+  auth_profile: null
+- pattern: https://deanofstudents.byu.edu/
+  match: prefix
+  types:
+    web: true
+    pdf: false
+    docx: false
+    xlsx: false
+    pptx: false
+  playwright: false
+  allow_http: false
+  auth_profile: null
+- pattern: https://honorcode.byu.edu/
+  match: prefix
+  types:
+    web: true
+    pdf: false
+    docx: false
+    xlsx: false
+    pptx: false
+  playwright: false
+  allow_http: false
+  auth_profile: null
+- pattern: https://avp.byu.edu/
+  match: prefix
+  types:
+    web: true
+    pdf: false
+    docx: false
+    xlsx: false
+    pptx: false
+  playwright: false
+  allow_http: false
+  auth_profile: null
+- pattern: https://www.dmba.com/
+  match: prefix
+  types:
+    web: true
+    pdf: true
+    docx: false
+    xlsx: false
+    pptx: false
+  playwright: false
+  allow_http: false
+  auth_profile: null
+- pattern: https://speeches.byu.edu/topics/
+  match: prefix
+  types:
+    web: true
+    pdf: false
+    docx: false
+    xlsx: false
+    pptx: false
+  playwright: false
+  allow_http: false
+  auth_profile: null
+- pattern: https://enrollment.byu.edu/
+  match: prefix
+  types:
+    web: true
+    pdf: false
+    docx: false
+    xlsx: false
+    pptx: false
+  playwright: false
+  allow_http: false
+  auth_profile: null
+allowed_domains:
+- policy.byu.edu
+- hrs.byu.edu
+- incident.byu.edu
+- risk.byu.edu
+- housing.byu.edu
+- compliance.byu.edu
+- styleguide.byu.edu
+- deanofstudents.byu.edu
+- honorcode.byu.edu
+- avp.byu.edu
+- www.dmba.com
+- speeches.byu.edu
+- enrollment.byu.edu
