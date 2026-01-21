@@ -124,6 +124,7 @@ def ingest() -> None:
                 }
                 for chunk in filtered_chunks
             ]
+            assert len(ids) == len(vectors) == len(payloads), (len(ids), len(vectors), len(payloads))
             upsert_vectors(client, collection, ids, vectors, payloads)
 
             conn.execute(
