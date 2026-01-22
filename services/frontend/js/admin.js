@@ -2036,6 +2036,167 @@ async function quarantineArtifacts(ids = []) {
   }
 }
 
+/* Ingest Job Functions (Redis Queue) */
+let currentIngestJobEventSource = null;
+
+async function startIngestJob() {
+  const statusTarget = 'ingestJobStatus';
+  setStatus(statusTarget, 'Starting ingest job...');
+  disableButtons(['startIngestJobBtn']);
+
+  try {
+    const resp = await fetch(`${API_BASE}/api/ingest`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        artifact_paths: [],  // Empty means process all artifacts
+        chunks_estimate: 0,
+        meta: {}
+      })
+    });
+
+    if (!resp.ok) {
+      setStatus(statusTarget, 'Failed to start ingest job', 'error');
+      enableButtons(['startIngestJobBtn']);
+      return;
+    }
+
+    const data = await resp.json();
+    const jobId = data.job_id;
+
+    // Show progress container
+    document.getElementById('ingestProgressContainer').style.display = 'block';
+    document.getElementById('ingestJobId').textContent = jobId;
+    document.getElementById('ingestJobStatusValue').textContent = data.status || 'queued';
+    document.getElementById('ingestJobProgress').textContent = '0 / 0';
+    document.getElementById('ingestProgressBar').value = 0;
+    document.getElementById('ingestLog').textContent = '';
+
+    setStatus(statusTarget, `Job ${jobId} started`, 'success');
+
+    // Start listening to events
+    listenIngestJobEvents(jobId);
+
+    // Poll for status updates
+    pollIngestJobStatus(jobId);
+
+  } catch (err) {
+    setStatus(statusTarget, `Error: ${err.message}`, 'error');
+    enableButtons(['startIngestJobBtn']);
+  }
+}
+
+function listenIngestJobEvents(jobId) {
+  // Close existing connection
+  if (currentIngestJobEventSource) {
+    currentIngestJobEventSource.close();
+  }
+
+  const eventSource = new EventSource(`${API_BASE}/api/ingest/${jobId}/events`);
+  currentIngestJobEventSource = eventSource;
+
+  eventSource.onmessage = function(event) {
+    try {
+      const payload = JSON.parse(event.data);
+
+      if (payload.type === 'progress') {
+        updateIngestProgress(payload.done || 0, payload.total || 0);
+        document.getElementById('ingestJobStatusValue').textContent = payload.status || 'running';
+      } else if (payload.type === 'log') {
+        appendIngestLog(`[${payload.level || 'info'}] ${payload.message || ''}`);
+      } else if (payload.type === 'complete') {
+        appendIngestLog(`✓ ${payload.msg || 'Ingest complete'}`);
+        document.getElementById('ingestJobStatusValue').textContent = 'done';
+        eventSource.close();
+        enableButtons(['startIngestJobBtn']);
+        setStatus('ingestJobStatus', 'Ingest complete', 'success');
+      } else if (payload.type === 'error') {
+        appendIngestLog(`✗ ERROR: ${payload.msg || 'Unknown error'}`);
+        document.getElementById('ingestJobStatusValue').textContent = 'error';
+        eventSource.close();
+        enableButtons(['startIngestJobBtn']);
+        setStatus('ingestJobStatus', 'Ingest failed', 'error');
+      } else if (payload.type === 'connected') {
+        appendIngestLog(`Connected to job ${jobId}`);
+      }
+    } catch (err) {
+      appendIngestLog(`Malformed event: ${event.data}`);
+    }
+  };
+
+  eventSource.onerror = function(event) {
+    appendIngestLog('Event stream error or closed');
+    eventSource.close();
+    enableButtons(['startIngestJobBtn']);
+  };
+}
+
+async function pollIngestJobStatus(jobId) {
+  try {
+    const resp = await fetch(`${API_BASE}/api/ingest/${jobId}`);
+    if (!resp.ok) return;
+
+    const info = await resp.json();
+    updateIngestProgress(parseInt(info.done || 0), parseInt(info.total || 0));
+    document.getElementById('ingestJobStatusValue').textContent = info.status || 'unknown';
+
+    // Keep polling if job is still running
+    if (info.status && !['done', 'error', 'cancelled'].includes(info.status)) {
+      setTimeout(() => pollIngestJobStatus(jobId), 2000);
+    }
+  } catch (err) {
+    // Ignore polling errors
+  }
+}
+
+function updateIngestProgress(done, total) {
+  const progressBar = document.getElementById('ingestProgressBar');
+  const progressText = document.getElementById('ingestJobProgress');
+
+  progressBar.max = total || 100;
+  progressBar.value = done;
+  progressText.textContent = `${done} / ${total}`;
+}
+
+function appendIngestLog(msg) {
+  const logArea = document.getElementById('ingestLog');
+  if (!logArea) return;
+
+  const timestamp = new Date().toLocaleTimeString();
+  logArea.textContent += `[${timestamp}] ${msg}\n`;
+  logArea.scrollTop = logArea.scrollHeight;
+}
+
+async function refreshIngestJobStatus() {
+  const jobId = document.getElementById('ingestJobId').textContent;
+  if (!jobId || jobId === '-') {
+    setStatus('ingestJobStatus', 'No active job', 'error');
+    return;
+  }
+
+  setStatus('ingestJobStatus', 'Refreshing...');
+
+  try {
+    const resp = await fetch(`${API_BASE}/api/ingest/${jobId}`);
+    if (!resp.ok) {
+      setStatus('ingestJobStatus', 'Job not found', 'error');
+      return;
+    }
+
+    const info = await resp.json();
+    document.getElementById('ingestJobStatusValue').textContent = info.status || 'unknown';
+    updateIngestProgress(parseInt(info.done || 0), parseInt(info.total || 0));
+    setStatus('ingestJobStatus', 'Status refreshed', 'success');
+  } catch (err) {
+    setStatus('ingestJobStatus', `Error: ${err.message}`, 'error');
+  }
+}
+
+function clearIngestLog() {
+  const logArea = document.getElementById('ingestLog');
+  if (logArea) logArea.textContent = '';
+}
+
 /* Helper functions */
 function disableButtons(ids) {
   ids.forEach(id => {
@@ -2232,6 +2393,11 @@ document.getElementById('quarantineSelectedBtn')?.addEventListener('click', asyn
   await quarantineArtifacts(ids);
 });
 
+// Wire up ingest job event listeners
+document.getElementById('startIngestJobBtn')?.addEventListener('click', startIngestJob);
+document.getElementById('refreshIngestJobBtn')?.addEventListener('click', refreshIngestJobStatus);
+document.getElementById('clearIngestLogBtn')?.addEventListener('click', clearIngestLog);
+
 window.loadAdminData = () => {
   loadConfigs();
   loadJobs();
@@ -2245,9 +2411,17 @@ window.resetAdminSession = () => {
   currentCrawlJobId = null;
   currentIngestJobId = null;
   currentJobLogId = null;
+
+  // Close ingest job event source
+  if (currentIngestJobEventSource) {
+    currentIngestJobEventSource.close();
+    currentIngestJobEventSource = null;
+  }
+
   setStatus('saveCrawlStatus', '');
   setStatus('crawlLogStatus', '');
   setStatus('ingestLogStatus', '');
+  setStatus('ingestJobStatus', '');
   setStatus('clearVectorsStatus', '');
   setStatus('savePromptsStatus', '');
   setStatus('jobLogStatus', '');
@@ -2256,9 +2430,11 @@ window.resetAdminSession = () => {
   const jobLog = document.getElementById('jobLog');
   const summaryPanel = document.getElementById('crawlSummary');
   const pillSummary = document.getElementById('crawlPillSummary');
+  const ingestProgressContainer = document.getElementById('ingestProgressContainer');
   if (crawlLog) crawlLog.textContent = '';
   if (ingestLog) ingestLog.textContent = '';
   if (jobLog) jobLog.textContent = '';
   if (summaryPanel) summaryPanel.style.display = 'none';
   if (pillSummary) pillSummary.style.display = 'none';
+  if (ingestProgressContainer) ingestProgressContainer.style.display = 'none';
 };
