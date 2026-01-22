@@ -136,41 +136,51 @@ blocked_paths:
 #### crawler.yml
 
 ```yaml
-discovery:
-  enabled: true
-  max_depth: 3                    # How many links deep to follow
-  max_pages: 1000                 # Maximum pages to crawl
-  respect_robots_txt: true
-  user_agent: "RagAI-Crawler/1.0"
-
-capture:
-  chunk_size: 512                 # Tokens per chunk
-  chunk_overlap: 50               # Overlap between chunks
-  min_chunk_size: 100             # Discard chunks smaller than this
-
-playwright:
-  enabled: false
-  headless: true
-  storage_state_path: /app/secrets/playwright/storageState.json
-  use_for_domains:
-    - authenticated-site.com
-  navigation_timeout_ms: 60000
+user_agent: RagAI-Crawler/1.0
+request_delay: 1                  # Delay between requests (seconds)
+max_depth: 3                      # How many links deep to follow
+timeout: 30                       # Request timeout (seconds)
 
 url_canonicalization:
-  strip_params:
+  preserve_query_params: []       # Query params to keep
+  blocked_params:                 # Query params to strip
     - utm_source
     - utm_medium
     - utm_campaign
     - fbclid
-    - ref
+    - gclid
+
+playwright:
+  enabled: true
+  auth_profiles:
+    default:
+      storage_state_path: secrets/playwright/default-storageState.json
+      use_for_domains: []
+    policy_cas:
+      storage_state_path: secrets/playwright/policy-byu-storageState.json
+      use_for_domains:
+        - policy.byu.edu
+      start_url: https://policy.byu.edu/
+      test_urls:
+        - https://policy.byu.edu/view/business-gifts-and-entertainment-policy
+  headless: true
+  navigation_timeout_ms: 60000
+
+structured_store:
+  enabled: true
+  sqlite_path: /app/data/sqlite/structured.db
+  xlsx_ingest:
+    max_cells: 50000
+    batch_size: 2000
 ```
 
 **Key settings:**
 
 - `max_depth` - Higher values find more pages but take longer
-- `max_pages` - Hard limit to prevent runaway crawls
-- `chunk_size` - Smaller chunks = more precise retrieval, larger = more context
+- `request_delay` - Politeness delay between requests
 - `playwright.enabled` - Enable for JavaScript-heavy or authenticated sites
+- `playwright.auth_profiles` - Named authentication profiles (use `tools/capture_auth_state.py` to create)
+- `structured_store` - Excel/spreadsheet cell extraction and storage
 
 #### ingest.yml
 
@@ -239,14 +249,10 @@ Logs stream in real-time, showing each URL as it's fetched.
 
 ### Stopping a Crawl
 
-Click "Stop Crawl" (if implemented) or:
+Click "Stop Crawl" in the admin console (if implemented), or restart the API service:
 
 ```bash
-# Find the crawl job process
-docker compose ps
-
-# Stop the crawler service
-docker compose stop crawler
+./tools/ragaictl restart api
 ```
 
 ### Reviewing Crawl Results
@@ -526,22 +532,22 @@ Restarts services.
 - Recovering from service crash
 - Forcing reconnection to dependencies
 
-#### dump_project
+#### export_code
 
 Creates a snapshot of project code and data.
 
 ```bash
 # Default: code only, no data, no secrets
-./tools/ragaictl dump_project
+./tools/ragaictl export_code
 
 # Include data
-./tools/ragaictl dump_project --scope all
+./tools/ragaictl export_code all
 
 # Specific service
-./tools/ragaictl dump_project --scope api
+./tools/ragaictl export_code api
 
 # Limit line length
-./tools/ragaictl dump_project --max-lines 2000
+./tools/ragaictl export_code all-code --max-lines 2000
 ```
 
 **Scopes:**
@@ -549,21 +555,20 @@ Creates a snapshot of project code and data.
 - `all-code` (default) - All code files, excludes data and secrets
 - `all` - Code + data, excludes secrets
 - `api` - API service only
-- `crawler` - Crawler service only
 - `ingestor` - Ingestor service only
 - `frontend` - Frontend service only
 
 **Output location:**
 
-Dumps are saved to `dumps/` directory with timestamp:
+Exports are saved to `dumps/` directory with timestamp:
 
 ```
-dumps/ragai-dump-20250120-143022.txt
+dumps/ragai-export-20250122-143022.txt
 ```
 
 **Use cases:**
 
-- Debugging with LLM assistance (paste dump to Claude, etc.)
+- Debugging with LLM assistance (paste export to Claude, etc.)
 - Code review
 - Backup before major changes
 - Sharing project structure with team
@@ -584,8 +589,9 @@ Monitor service health via:
 
 ```bash
 ./tools/ragaictl logs api
-./tools/ragaictl logs crawler
 ./tools/ragaictl logs ingestor
+./tools/ragaictl logs ollama
+./tools/ragaictl logs qdrant
 ```
 
 **Job logs (file-based):**

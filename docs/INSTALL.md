@@ -215,34 +215,49 @@ python -m playwright install chromium
 
 ### 2. Capture Authentication State
 
-Run the helper script to log in and save your session:
+Run the interactive helper script to create an auth profile:
 
 ```bash
-python tools/playwright_capture_state.py \
-  --url https://yoursite.com \
-  --output secrets/playwright/yoursite-storageState.json
+python tools/capture_auth_state.py
 ```
 
-A browser window will open. Log in to the site, then press Enter in the terminal to save the session.
+The script will:
+- Show auth hints from previous crawl attempts (if any)
+- Let you select an existing profile or create a new one
+- Prompt for:
+  - Storage state path (e.g., `secrets/playwright/yoursite-storageState.json`)
+  - Domains to use this auth for (comma-separated, e.g., `yoursite.com`)
+  - Start URL (login entry point, e.g., `https://yoursite.com/login`)
+  - Test URLs (protected pages to validate auth, comma-separated)
+- Open a browser window for you to log in (including MFA)
+- Validate authentication by testing access to protected URLs
+- Save the storage state and update `config/crawler.yml` automatically
 
-### 3. Configure Crawler
+### 3. Verify Configuration
 
-Edit `config/crawler.yml`:
+The capture tool automatically updates `config/crawler.yml`. Verify the profile was created:
 
 ```yaml
 playwright:
   enabled: true
+  auth_profiles:
+    yoursite:
+      storage_state_path: secrets/playwright/yoursite-storageState.json
+      use_for_domains:
+        - yoursite.com
+      start_url: https://yoursite.com/login
+      test_urls:
+        - https://yoursite.com/protected-page
   headless: true
-  storage_state_path: /app/secrets/playwright/yoursite-storageState.json
-  use_for_domains:
-    - yoursite.com
   navigation_timeout_ms: 60000
 ```
 
-### 4. Rebuild Crawler
+### 4. Restart API Service
+
+Playwright is integrated into the API service. Restart to apply changes:
 
 ```bash
-docker compose build crawler
+./tools/ragaictl restart api
 ```
 
 ## Verification
@@ -368,10 +383,10 @@ sudo systemctl restart docker
 ls -la secrets/playwright/
 
 # Recapture authentication state
-python tools/playwright_capture_state.py --url https://yoursite.com --output secrets/playwright/yoursite-storageState.json
+python tools/capture_auth_state.py --profile yoursite
 
-# Rebuild crawler with new state
-docker compose build crawler
+# Restart API service to apply changes
+./tools/ragaictl restart api
 ```
 
 ## Next Steps
