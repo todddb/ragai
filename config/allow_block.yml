@@ -18,6 +18,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: policy_cas
+  id: 73cc2311-7f76-46c1-8b8d-e68ec8b4fe69
 - pattern: https://hrs.byu.edu/procedures/
   match: prefix
   types:
@@ -29,6 +30,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: a72b531f-fe73-4cb7-81a8-4415682a61db
 - pattern: https://incident.byu.edu/forms/
   match: prefix
   types:
@@ -40,6 +42,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: 0e9192df-5a2a-4e95-a8de-e742e23c287b
 - pattern: https://risk.byu.edu/fire/
   match: prefix
   types:
@@ -51,6 +54,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: 227ecb1c-940a-40cf-b50a-697fbdac5dc7
 - pattern: https://housing.byu.edu/secure/
   match: prefix
   types:
@@ -62,6 +66,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: cf7f4639-a63b-422c-836c-d0c8ce9a6401
 - pattern: https://compliance.byu.edu/
   match: prefix
   types:
@@ -73,6 +78,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: 8afc9cd5-935f-40cb-be9b-12dfca607074
 - pattern: https://styleguide.byu.edu/brand-guidelines/
   match: prefix
   types:
@@ -84,6 +90,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: 398f19da-30c6-40a8-b18e-6af3a7163cda
 - pattern: https://deanofstudents.byu.edu/
   match: prefix
   types:
@@ -95,6 +102,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: 20a5f230-1229-4bf3-a363-d82d19e00f16
 - pattern: https://honorcode.byu.edu/
   match: prefix
   types:
@@ -106,6 +114,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: 8dc188f1-5edb-401a-b8ee-81ea1f354215
 - pattern: https://avp.byu.edu/
   match: prefix
   types:
@@ -117,6 +126,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: b52f34fc-8ec1-4d2f-bd8a-d581d0f4ab29
 - pattern: https://www.dmba.com/
   match: prefix
   types:
@@ -128,6 +138,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: a7f7718e-5ad6-4637-8d79-f40ed8a8ba55
 - pattern: https://speeches.byu.edu/topics/
   match: prefix
   types:
@@ -139,6 +150,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: 453a506d-44e6-4d1f-8f6f-f55bba60deae
 - pattern: https://enrollment.byu.edu/
   match: prefix
   types:
@@ -150,17 +162,30 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: 77bef156-2662-4037-9dc4-1d0de9ca3734
+- id: 74423a14-2b6e-4313-a497-f889a926e5a1
+  pattern: https://hrs.byu.edu/procedures/
+  match: prefix
+  types:
+    web: true
+    pdf: true
+    docx: false
+    xlsx: false
+    pptx: false
+  playwright: false
+  allow_http: false
+  auth_profile: policy_cas
 allowed_domains:
-- policy.byu.edu
+- avp.byu.edu
+- compliance.byu.edu
+- deanofstudents.byu.edu
+- enrollment.byu.edu
+- honorcode.byu.edu
+- housing.byu.edu
 - hrs.byu.edu
 - incident.byu.edu
+- policy.byu.edu
 - risk.byu.edu
-- housing.byu.edu
-- compliance.byu.edu
-- styleguide.byu.edu
-- deanofstudents.byu.edu
-- honorcode.byu.edu
-- avp.byu.edu
-- www.dmba.com
 - speeches.byu.edu
-- enrollment.byu.edu
+- styleguide.byu.edu
+- www.dmba.com

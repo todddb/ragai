@@ -22,6 +22,7 @@ Scopes:
   all-code   (default, no data, no secrets)
   all        (includes data, excludes secrets)
   api
+  docs       (docs/ - if exists, *.md)
   ingestor
   frontend
 
@@ -55,6 +56,9 @@ case "$scope" in
   api)
     roots=(services/api)
     ;;
+  docs)
+    roots=(docs .)
+    ;;
   ingestor)
     roots=(services/ingestor)
     ;;
@@ -79,6 +83,13 @@ else
   exclude_paths+=(data)
 fi
 
+# Docs-only export: restrict to markdown + text
+if [[ "$scope" == "docs" ]]; then
+  include_patterns=("*.md" "*.txt")
+fi
+
+
+
 {
   echo "Scope: $scope"
   echo "Timestamp: $timestamp"
@@ -101,16 +112,31 @@ fi
       find_excludes+=( ! -path "*/data/*" )
     fi
 
+
+    # Build the (-name ... -o -name ...) expression dynamically
+    name_expr=()
+    for pat in "${include_patterns[@]}"; do
+      name_expr+=( -name "$pat" -o )
+    done
+    # remove trailing -o
+    if [[ ${#name_expr[@]} -gt 0 ]]; then
+      unset 'name_expr[${#name_expr[@]}-1]'
+    fi
+
+    # If somehow include_patterns is empty, fail early (prevents \( \) )
+    if [[ ${#name_expr[@]} -eq 0 ]]; then
+      echo "No include patterns configured for scope: $scope" >&2
+      exit 1
+    fi
+
     while IFS= read -r -d '' file; do
       echo "===== $file ====="
       head -n "$max_lines" "$file"
       echo ""
-    done < <(find "$root" -type f \( \
-      -name "${include_patterns[0]}" -o -name "${include_patterns[1]}" -o -name "${include_patterns[2]}" \
-      -o -name "${include_patterns[3]}" -o -name "${include_patterns[4]}" -o -name "${include_patterns[5]}" \
-      -o -name "${include_patterns[6]}" -o -name "${include_patterns[7]}" -o -name "${include_patterns[8]}" \
-      -o -name "${include_patterns[9]}" \) \
+    done < <(find "$root" -type f \( "${name_expr[@]}" \) \
       "${find_excludes[@]}" -print0)
+
+
   done
 } > "$output"
 

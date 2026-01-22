@@ -17,12 +17,13 @@ Commands:
   logs [service] [--tail N]             Follow logs (optionally scoped to a service)
   build [--no-cache] [service...]       Build images (default: all services)
   restart [service...]                  Restart services (default: all), then health check
-  export_code [scope] [--max-lines N]   Export project snapshot (replaces dump_project)
+  export [scope] [--max-lines N]        Export project snapshot (replaces dump_project)
 
 Export scopes:
   all-code   (default, no data, no secrets)
   all        (includes data, excludes secrets)
   api
+  docs       (/docs -if exists, *.md)
   ingestor
   frontend
 
@@ -318,7 +319,7 @@ case "$command" in
   restart)
     restart_cmd "$@"
     ;;
-  export_code)
+  export)
     ./tools/export_code.sh "$@"
     ;;
   -h|--help|"")

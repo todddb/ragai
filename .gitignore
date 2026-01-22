@@ -13,4 +13,4 @@ venv/
 /secrets/playwright/*.json
 /ollama_models/
 /qdrant_storage/
-/dumps/
+/exports/
