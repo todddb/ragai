@@ -2,6 +2,8 @@ let currentCrawlJobId = null;
 let currentIngestJobId = null;
 let currentJobLogId = null;
 let cachedCrawlerConfig = {};
+let cachedIngestConfig = {};
+let ingestWorkerPoller = null;
 let authProfiles = [];
 let authHints = { by_domain: {}, recent: [] };
 let authStatusCache = { results: {}, updatedAt: null };
@@ -1331,6 +1333,97 @@ async function loadConfigs() {
   checkForLegacySettings();
   await loadAuthHints();
   renderAllowTable();
+
+  try {
+    const ingest = await fetch(`${API_BASE}/api/admin/config/ingest`).then((r) => r.json());
+    cachedIngestConfig = ingest || {};
+    applyIngestConfig(cachedIngestConfig);
+  } catch (error) {
+    cachedIngestConfig = {};
+  }
+}
+
+function applyIngestConfig(config = {}) {
+  const ingest = config.ingest || {};
+  const embedConcurrency = document.getElementById('ingestEmbedConcurrency');
+  const upsertBatchSize = document.getElementById('ingestUpsertBatchSize');
+  const chunkBatchSize = document.getElementById('ingestChunkBatchSize');
+  const maxInflightChunks = document.getElementById('ingestMaxInflightChunks');
+
+  if (embedConcurrency) embedConcurrency.value = ingest.embed_concurrency ?? 4;
+  if (upsertBatchSize) upsertBatchSize.value = ingest.upsert_batch_size ?? 64;
+  if (chunkBatchSize) chunkBatchSize.value = ingest.chunk_batch_size ?? 16;
+  if (maxInflightChunks) maxInflightChunks.value = ingest.max_inflight_chunks ?? 256;
+}
+
+async function saveIngestPerformanceSettings() {
+  const statusTarget = 'ingestPerformanceStatus';
+  setStatus(statusTarget, 'Saving ingest performance settings...');
+  const embedConcurrency = parseInt(document.getElementById('ingestEmbedConcurrency')?.value || '4', 10);
+  const upsertBatchSize = parseInt(document.getElementById('ingestUpsertBatchSize')?.value || '64', 10);
+  const chunkBatchSize = parseInt(document.getElementById('ingestChunkBatchSize')?.value || '16', 10);
+  const maxInflightChunks = parseInt(document.getElementById('ingestMaxInflightChunks')?.value || '256', 10);
+
+  const updated = {
+    ...cachedIngestConfig,
+    ingest: {
+      ...(cachedIngestConfig.ingest || {}),
+      embed_concurrency: embedConcurrency,
+      upsert_batch_size: upsertBatchSize,
+      chunk_batch_size: chunkBatchSize,
+      max_inflight_chunks: maxInflightChunks
+    }
+  };
+
+  try {
+    const response = await fetch(`${API_BASE}/api/admin/config/ingest`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updated)
+    });
+    if (!response.ok) {
+      const message = await response.text();
+      setStatus(statusTarget, message || 'Error saving ingest config', 'error');
+      return;
+    }
+    cachedIngestConfig = updated;
+    setStatus(statusTarget, 'Performance settings saved. Restart worker if needed.', 'success');
+  } catch (error) {
+    setStatus(statusTarget, `Error: ${error.message}`, 'error');
+  }
+}
+
+async function loadIngestWorkerStatus() {
+  const statusEl = document.getElementById('ingestWorkerState');
+  const queueEl = document.getElementById('ingestQueueDepth');
+  if (!statusEl || !queueEl) return;
+  if (ingestWorkerPoller) {
+    clearTimeout(ingestWorkerPoller);
+    ingestWorkerPoller = null;
+  }
+  try {
+    const resp = await fetch(`${API_BASE}/api/ingest/worker/status`);
+    if (!resp.ok) {
+      statusEl.textContent = 'Worker offline — start ingestor-worker service';
+      queueEl.textContent = '-';
+      return;
+    }
+    const data = await resp.json();
+    const age = data.age_seconds;
+    if (age === null) {
+      statusEl.textContent = 'Worker offline — start ingestor-worker service';
+    } else if (age > 15) {
+      statusEl.textContent = `Worker stale (${Math.round(age)}s ago)`;
+    } else {
+      const pid = data.worker?.pid ? `PID ${data.worker.pid}` : 'Online';
+      statusEl.textContent = `Online (${pid})`;
+    }
+    queueEl.textContent = data.queue_depth ?? '-';
+  } catch (error) {
+    statusEl.textContent = 'Worker offline — start ingestor-worker service';
+    queueEl.textContent = '-';
+  }
+  ingestWorkerPoller = setTimeout(loadIngestWorkerStatus, 5000);
 }
 
 async function loadRecommendations() {
@@ -1717,7 +1810,7 @@ async function triggerJob(type) {
     streamLog(currentCrawlJobId, 'crawlLog', 'crawl');
   } else {
     currentIngestJobId = data.job_id;
-    streamLog(currentIngestJobId, 'ingestLog', 'ingest');
+    streamLog(currentIngestJobId, 'ingestQueueLog', 'ingest');
   }
   loadJobs();
 }
@@ -1818,17 +1911,14 @@ async function clearVectors() {
   setStatus(statusTarget, 'Reading current vector count...');
 
   try {
-    const response = await fetch(`${API_BASE}/api/admin/clear_vectors`, { method: 'POST' });
+    const response = await fetch(`${API_BASE}/api/admin/reset/qdrant`, { method: 'POST' });
     if (response.ok) {
       const result = await response.json();
-      const before = result.count_before || 0;
-      const after = result.count_after || 0;
-      const removed = result.removed || 0;
       const collection = result.collection || 'unknown';
 
       setStatus(
         statusTarget,
-        `Cleared vectors from '${collection}': before=${before} after=${after} removed=${removed}`,
+        `Cleared vectors from '${collection}'.`,
         'success'
       );
     } else {
@@ -1858,7 +1948,7 @@ async function resetCrawl() {
   setStatus(statusTarget, 'Resetting crawl state...');
 
   try {
-    const response = await fetch(`${API_BASE}/api/admin/reset_crawl`, { method: 'POST' });
+    const response = await fetch(`${API_BASE}/api/admin/reset/artifacts`, { method: 'POST' });
     if (response.ok) {
       const result = await response.json();
       const deletedItems = result.deleted || [];
@@ -1902,14 +1992,48 @@ async function resetIngest() {
   }
 }
 
+async function resetAllData() {
+  const confirmed = prompt(
+    'This will delete ALL data including artifacts, logs, quarantine, Qdrant vectors, and ingest metadata.\n\n' +
+    'Type DELETE to confirm:'
+  );
+
+  if (confirmed !== 'DELETE') {
+    return;
+  }
+
+  const statusTarget = 'resetAllStatus';
+  setStatus(statusTarget, 'Resetting all data...');
+
+  try {
+    const response = await fetch(`${API_BASE}/api/admin/reset/all`, { method: 'POST' });
+    if (response.ok) {
+      const result = await response.json();
+      const deletedItems = result.deleted || [];
+      setStatus(statusTarget, `Reset complete: ${deletedItems.join(', ')}`, 'success');
+    } else {
+      setStatus(statusTarget, 'Error resetting all data', 'error');
+    }
+  } catch (error) {
+    setStatus(statusTarget, `Error: ${error.message}`, 'error');
+  }
+}
+
 // Validation & Quarantine functions
 async function loadDataValidation() {
   const statusTarget = 'dataValidationStatus';
   setStatus(statusTarget, 'Loading validation summary...');
   try {
-    const resp = await fetch(`${API_BASE}/api/admin/validation_summary`);
+    const resp = await fetch(`${API_BASE}/api/admin/validate/crawl/summary`);
     if (!resp.ok) {
-      setStatus(statusTarget, 'Error loading validation summary', 'error');
+      if (resp.status === 404) {
+        setStatus(statusTarget, 'No crawl validation summary yet. Run validation to generate one.', 'error');
+        renderValidationSummary({});
+        renderValidationList([]);
+        return;
+      }
+      const message = await resp.text();
+      setStatus(statusTarget, message || 'Error loading validation summary', 'error');
       return;
     }
     const payload = await resp.json();
@@ -1926,9 +2050,10 @@ async function validateArtifacts() {
   setStatus(statusTarget, 'Validating artifacts...');
   disableButtons(['validateArtifactsBtn', 'quarantineSelectedBtn']);
   try {
-    const resp = await fetch(`${API_BASE}/api/admin/validate_artifacts`, { method: 'POST' });
+    const resp = await fetch(`${API_BASE}/api/admin/validate/crawl`, { method: 'POST' });
     if (!resp.ok) {
-      setStatus(statusTarget, 'Validation failed', 'error');
+      const message = await resp.text();
+      setStatus(statusTarget, message || 'Validation failed', 'error');
       enableButtons(['validateArtifactsBtn', 'quarantineSelectedBtn']);
       return;
     }
@@ -1966,24 +2091,32 @@ function renderValidationList(list = []) {
   const container = document.getElementById('validationList');
   if (!container) return;
   container.innerHTML = '';
+  if (!list.length) {
+    container.innerHTML = '<div class="status-text">No flagged artifacts.</div>';
+    updateSelectedValidationCount();
+    const selectAll = document.getElementById('selectAllValidation');
+    if (selectAll) selectAll.checked = false;
+    return;
+  }
+
   list.forEach(item => {
     const row = document.createElement('div');
     row.className = 'validation-row';
     row.innerHTML = `
-      <label style="display:flex; gap:8px; align-items:center;">
+      <div style="display:flex; gap:12px; align-items:center;">
         <input type="checkbox" class="validation-checkbox" data-artifact-id="${item.id}" />
         <div style="flex:1">
-          <div style="font-weight:600;">${escapeHtml(item.title || item.url)}</div>
-          <div style="font-size:0.85rem;color:var(--text-secondary)">${escapeHtml(item.url)}</div>
+          <div style="font-weight:600;">${escapeHtml(item.title || item.url || item.id)}</div>
+          <div style="font-size:0.85rem;color:var(--text-secondary)">${escapeHtml(item.url || '')}</div>
+          <div style="font-size:0.85rem;color:var(--text-secondary)">${escapeHtml(item.reason || '')}</div>
         </div>
-        <div style="min-width:160px; text-align:right;">
-          <div style="font-weight:600">${item.risk_score ?? '—'}</div>
-          <div style="font-size:0.85rem">${escapeHtml(item.reason || '')}</div>
+        <div style="min-width:140px; text-align:right;">
+          <div style="font-weight:600">${item.severity || '—'}</div>
           <div class="actions-row" style="margin-top:6px;">
             <button class="btn btn-small" data-action="quarantine" data-id="${item.id}">Quarantine</button>
           </div>
         </div>
-      </label>
+      </div>
     `;
     container.appendChild(row);
   });
@@ -1995,6 +2128,26 @@ function renderValidationList(list = []) {
       await quarantineArtifacts([id]);
     });
   });
+
+  container.querySelectorAll('.validation-checkbox').forEach(cb => {
+    cb.addEventListener('change', updateSelectedValidationCount);
+  });
+  const selectAll = document.getElementById('selectAllValidation');
+  if (selectAll) selectAll.checked = false;
+  updateSelectedValidationCount();
+}
+
+function updateSelectedValidationCount() {
+  const checkboxes = Array.from(document.querySelectorAll('.validation-checkbox'));
+  const selected = checkboxes.filter(cb => cb.checked).length;
+  const countEl = document.getElementById('selectedValidationCount');
+  if (countEl) {
+    countEl.textContent = selected ? `${selected} selected` : '';
+  }
+  const selectAll = document.getElementById('selectAllValidation');
+  if (selectAll && checkboxes.length) {
+    selectAll.checked = selected === checkboxes.length;
+  }
 }
 
 async function quarantineArtifacts(ids = []) {
@@ -2002,7 +2155,7 @@ async function quarantineArtifacts(ids = []) {
   const statusTarget = 'dataValidationStatus';
   setStatus(statusTarget, `Quarantining ${ids.length} artifact(s)...`);
   try {
-    const resp = await fetch(`${API_BASE}/api/admin/quarantine_artifacts`, {
+    const resp = await fetch(`${API_BASE}/api/admin/quarantine`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids })
@@ -2036,8 +2189,106 @@ async function quarantineArtifacts(ids = []) {
   }
 }
 
+// Ingest validation
+async function loadIngestValidation() {
+  const statusTarget = 'ingestValidationStatus';
+  setStatus(statusTarget, 'Loading ingest validation summary...');
+  try {
+    const resp = await fetch(`${API_BASE}/api/admin/validate/ingest/summary`);
+    if (!resp.ok) {
+      if (resp.status === 404) {
+        setStatus(statusTarget, 'No ingest validation summary yet. Run validation to generate one.', 'error');
+        renderIngestValidationSummary({});
+        renderIngestValidationFindings([]);
+        return;
+      }
+      const message = await resp.text();
+      setStatus(statusTarget, message || 'Error loading ingest validation summary', 'error');
+      return;
+    }
+    const payload = await resp.json();
+    renderIngestValidationSummary(payload.summary);
+    renderIngestValidationFindings(payload.findings || []);
+    setStatus(statusTarget, 'Loaded', 'success');
+  } catch (err) {
+    setStatus(statusTarget, `Error: ${err.message}`, 'error');
+  }
+}
+
+async function validateIngest() {
+  const statusTarget = 'ingestValidationStatus';
+  setStatus(statusTarget, 'Validating ingest output...');
+  disableButtons(['validateIngestBtn']);
+  try {
+    const resp = await fetch(`${API_BASE}/api/admin/validate/ingest`, { method: 'POST' });
+    if (!resp.ok) {
+      const message = await resp.text();
+      setStatus(statusTarget, message || 'Validation failed', 'error');
+      return;
+    }
+    const payload = await resp.json();
+    renderIngestValidationSummary(payload.summary);
+    renderIngestValidationFindings(payload.findings || []);
+    setStatus(statusTarget, 'Validation complete', 'success');
+  } catch (err) {
+    setStatus(statusTarget, `Error: ${err.message}`, 'error');
+  } finally {
+    enableButtons(['validateIngestBtn']);
+  }
+}
+
+function renderIngestValidationSummary(summary = {}) {
+  const el = document.getElementById('ingestValidationSummary');
+  if (!el) return;
+  el.innerHTML = `
+    <div>
+      <div class="field-label">Total findings</div>
+      <div class="info-value">${summary.total || 0}</div>
+    </div>
+    <div>
+      <div class="field-label">High</div>
+      <div class="info-value">${summary.high || 0}</div>
+    </div>
+    <div>
+      <div class="field-label">Medium</div>
+      <div class="info-value">${summary.medium || 0}</div>
+    </div>
+    <div>
+      <div class="field-label">Low</div>
+      <div class="info-value">${summary.low || 0}</div>
+    </div>
+  `;
+}
+
+function renderIngestValidationFindings(findings = []) {
+  const container = document.getElementById('ingestValidationFindings');
+  if (!container) return;
+  if (!findings.length) {
+    container.innerHTML = '<div class="status-text">No ingest findings reported.</div>';
+    return;
+  }
+  container.innerHTML = findings
+    .map((finding) => `
+      <div class="validation-row">
+        <div style="display:flex; justify-content:space-between; gap:12px;">
+          <div>
+            <div style="font-weight:600;">${escapeHtml(finding.code || 'Finding')}</div>
+            <div style="font-size:0.85rem;color:var(--text-secondary)">${escapeHtml(finding.message || '')}</div>
+            <div style="font-size:0.8rem;color:var(--text-secondary)">${escapeHtml(finding.evidence || '')}</div>
+          </div>
+          <div style="min-width:120px; text-align:right;">
+            <div style="font-weight:600">${escapeHtml(finding.severity || '—')}</div>
+          </div>
+        </div>
+      </div>
+    `)
+    .join('');
+}
+
 /* Ingest Job Functions (Redis Queue) */
 let currentIngestJobEventSource = null;
+let ingestProgressTimestamps = [];
+let ingestProgressLastTime = null;
 
 async function startIngestJob() {
   const statusTarget = 'ingestJobStatus';
@@ -2063,14 +2314,8 @@ async function startIngestJob() {
 
     const data = await resp.json();
     const jobId = data.job_id;
-
-    // Show progress container
-    document.getElementById('ingestProgressContainer').style.display = 'block';
-    document.getElementById('ingestJobId').textContent = jobId;
-    document.getElementById('ingestJobStatusValue').textContent = data.status || 'queued';
-    document.getElementById('ingestJobProgress').textContent = '0 / 0';
-    document.getElementById('ingestProgressBar').value = 0;
-    document.getElementById('ingestLog').textContent = '';
+    currentIngestJobId = jobId;
+    resetIngestProgressUi();
 
     setStatus(statusTarget, `Job ${jobId} started`, 'success');
 
@@ -2099,23 +2344,28 @@ function listenIngestJobEvents(jobId) {
     try {
       const payload = JSON.parse(event.data);
 
-      if (payload.type === 'progress') {
-        updateIngestProgress(payload.done || 0, payload.total || 0);
-        document.getElementById('ingestJobStatusValue').textContent = payload.status || 'running';
+      if (payload.type === 'start') {
+        updateIngestProgress(0, payload.total_artifacts || 0, '-', 0);
+        setStatus('ingestJobStatus', 'Ingest running', 'success');
+      } else if (payload.type === 'artifact_progress') {
+        updateIngestProgress(
+          payload.done_artifacts || 0,
+          payload.total_artifacts || 0,
+          payload.current_artifact || '-',
+          payload.errors || 0
+        );
       } else if (payload.type === 'log') {
         appendIngestLog(`[${payload.level || 'info'}] ${payload.message || ''}`);
       } else if (payload.type === 'complete') {
         appendIngestLog(`✓ ${payload.msg || 'Ingest complete'}`);
-        document.getElementById('ingestJobStatusValue').textContent = 'done';
+        updateIngestSummary(payload);
+        setStatus('ingestJobStatus', 'Ingest complete', 'success');
         eventSource.close();
         enableButtons(['startIngestJobBtn']);
-        setStatus('ingestJobStatus', 'Ingest complete', 'success');
       } else if (payload.type === 'error') {
         appendIngestLog(`✗ ERROR: ${payload.msg || 'Unknown error'}`);
-        document.getElementById('ingestJobStatusValue').textContent = 'error';
-        eventSource.close();
-        enableButtons(['startIngestJobBtn']);
-        setStatus('ingestJobStatus', 'Ingest failed', 'error');
+        incrementIngestErrorCount();
+        setStatus('ingestJobStatus', 'Ingest error reported', 'error');
       } else if (payload.type === 'connected') {
         appendIngestLog(`Connected to job ${jobId}`);
       }
@@ -2128,6 +2378,7 @@ function listenIngestJobEvents(jobId) {
     appendIngestLog('Event stream error or closed');
     eventSource.close();
     enableButtons(['startIngestJobBtn']);
+    setStatus('ingestJobStatus', 'Event stream disconnected - polling status', 'error');
   };
 }
 
@@ -2137,8 +2388,9 @@ async function pollIngestJobStatus(jobId) {
     if (!resp.ok) return;
 
     const info = await resp.json();
-    updateIngestProgress(parseInt(info.done || 0), parseInt(info.total || 0));
-    document.getElementById('ingestJobStatusValue').textContent = info.status || 'unknown';
+    const done = parseInt(info.done_artifacts || info.done || 0, 10);
+    const total = parseInt(info.total_artifacts || info.total || 0, 10);
+    updateIngestProgress(done, total, info.current_artifact || '-', info.errors || 0);
 
     // Keep polling if job is still running
     if (info.status && !['done', 'error', 'cancelled'].includes(info.status)) {
@@ -2149,17 +2401,95 @@ async function pollIngestJobStatus(jobId) {
   }
 }
 
-function updateIngestProgress(done, total) {
-  const progressBar = document.getElementById('ingestProgressBar');
+function updateIngestProgress(done, total, currentArtifact, errors) {
+  const progressBar = document.getElementById('ingestProgressBarFill');
   const progressText = document.getElementById('ingestJobProgress');
+  const etaText = document.getElementById('ingestEta');
+  const currentText = document.getElementById('ingestCurrentArtifact');
+  const errorText = document.getElementById('ingestErrorCount');
+  const container = document.getElementById('ingestProgressContainer');
 
-  progressBar.max = total || 100;
-  progressBar.value = done;
-  progressText.textContent = `${done} / ${total}`;
+  if (container) {
+    container.style.display = 'block';
+  }
+
+  if (progressText) {
+    progressText.textContent = `${done} / ${total || 0}`;
+  }
+  if (progressBar) {
+    const pct = total ? Math.round((done / total) * 100) : 0;
+    progressBar.style.width = `${pct}%`;
+  }
+  if (currentText) {
+    currentText.textContent = currentArtifact || '-';
+  }
+  if (errorText) {
+    errorText.textContent = errors || 0;
+  }
+
+  const now = Date.now();
+  if (done > 0) {
+    if (ingestProgressLastTime) {
+      ingestProgressTimestamps.push(now - ingestProgressLastTime);
+      if (ingestProgressTimestamps.length > 10) {
+        ingestProgressTimestamps.shift();
+      }
+    }
+    ingestProgressLastTime = now;
+  }
+  if (etaText) {
+    if (ingestProgressTimestamps.length >= 5 && total > done) {
+      const avg = ingestProgressTimestamps.reduce((a, b) => a + b, 0) / ingestProgressTimestamps.length;
+      const etaMs = avg * (total - done);
+      etaText.textContent = formatDuration(etaMs);
+    } else if (done === total && total > 0) {
+      etaText.textContent = 'Complete';
+    } else {
+      etaText.textContent = 'Calculating…';
+    }
+  }
+}
+
+function updateIngestSummary(payload) {
+  const summaryCard = document.getElementById('ingestSummaryCard');
+  const summaryContent = document.getElementById('ingestSummaryContent');
+  if (!summaryCard || !summaryContent) return;
+  const artifacts = payload.total_artifacts || 0;
+  const documents = payload.total_documents || 0;
+  const chunks = payload.total_chunks || 0;
+  const errors = payload.errors || 0;
+  summaryContent.innerHTML = `
+    <div class="info-grid">
+      <div>
+        <div class="field-label">Artifacts</div>
+        <div class="info-value">${artifacts}</div>
+      </div>
+      <div>
+        <div class="field-label">Documents</div>
+        <div class="info-value">${documents}</div>
+      </div>
+      <div>
+        <div class="field-label">Chunks</div>
+        <div class="info-value">${chunks}</div>
+      </div>
+      <div>
+        <div class="field-label">Errors</div>
+        <div class="info-value">${errors}</div>
+      </div>
+    </div>
+  `;
+  summaryCard.style.display = 'block';
+}
+
+function incrementIngestErrorCount() {
+  const errorText = document.getElementById('ingestErrorCount');
+  if (!errorText) return;
+  const current = parseInt(errorText.textContent || '0', 10);
+  errorText.textContent = current + 1;
 }
 
 function appendIngestLog(msg) {
-  const logArea = document.getElementById('ingestLog');
+  const logArea = document.getElementById('ingestQueueLog');
   if (!logArea) return;
 
   const timestamp = new Date().toLocaleTimeString();
@@ -2168,7 +2498,7 @@ function appendIngestLog(msg) {
 }
 
 async function refreshIngestJobStatus() {
-  const jobId = document.getElementById('ingestJobId').textContent;
+  const jobId = currentIngestJobId;
   if (!jobId || jobId === '-') {
     setStatus('ingestJobStatus', 'No active job', 'error');
     return;
@@ -2184,8 +2514,12 @@ async function refreshIngestJobStatus() {
     }
 
     const info = await resp.json();
-    document.getElementById('ingestJobStatusValue').textContent = info.status || 'unknown';
-    updateIngestProgress(parseInt(info.done || 0), parseInt(info.total || 0));
+    updateIngestProgress(
+      parseInt(info.done_artifacts || info.done || 0, 10),
+      parseInt(info.total_artifacts || info.total || 0, 10),
+      info.current_artifact || '-',
+      info.errors || 0
+    );
     setStatus('ingestJobStatus', 'Status refreshed', 'success');
   } catch (err) {
     setStatus('ingestJobStatus', `Error: ${err.message}`, 'error');
@@ -2193,8 +2527,36 @@ async function refreshIngestJobStatus() {
 }
 
 function clearIngestLog() {
-  const logArea = document.getElementById('ingestLog');
+  const logArea = document.getElementById('ingestQueueLog');
   if (logArea) logArea.textContent = '';
+}
+
+function resetIngestProgressUi() {
+  const container = document.getElementById('ingestProgressContainer');
+  if (container) container.style.display = 'block';
+  const progressBar = document.getElementById('ingestProgressBarFill');
+  if (progressBar) progressBar.style.width = '0%';
+  const progressText = document.getElementById('ingestJobProgress');
+  if (progressText) progressText.textContent = '0 / 0';
+  const etaText = document.getElementById('ingestEta');
+  if (etaText) etaText.textContent = 'Calculating…';
+  const currentText = document.getElementById('ingestCurrentArtifact');
+  if (currentText) currentText.textContent = '-';
+  const errorText = document.getElementById('ingestErrorCount');
+  if (errorText) errorText.textContent = '0';
+  const summaryCard = document.getElementById('ingestSummaryCard');
+  if (summaryCard) summaryCard.style.display = 'none';
+  ingestProgressTimestamps = [];
+  ingestProgressLastTime = null;
+  clearIngestLog();
+}
+
+function formatDuration(ms) {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds}s`;
+  return `${minutes}m ${seconds}s`;
 }
 
 /* Helper functions */
@@ -2261,7 +2623,7 @@ document.getElementById('allowAddInput')?.addEventListener('keydown', (event) =>
 
 document.getElementById('triggerCrawl').addEventListener('click', () => triggerJob('crawl'));
 
-document.getElementById('triggerIngest').addEventListener('click', () => triggerJob('ingest'));
+document.getElementById('triggerIngestLegacy')?.addEventListener('click', () => triggerJob('ingest'));
 
 document.getElementById('savePrompts').addEventListener('click', savePrompts);
 
@@ -2274,19 +2636,11 @@ document.getElementById('deleteCrawlLog').addEventListener('click', () => {
   currentCrawlJobId = null;
 });
 
-document.getElementById('exportIngestLog').addEventListener('click', () => {
-  exportCurrentLog(currentIngestJobId, 'ingestLogStatus');
-});
-
-document.getElementById('deleteIngestLog').addEventListener('click', () => {
-  deleteCurrentLog(currentIngestJobId, 'ingestLogStatus', 'ingest', 'ingestLog');
-  currentIngestJobId = null;
-});
-
 document.getElementById('clearVectors')?.addEventListener('click', clearVectors);
 document.getElementById('clearVectorsNew')?.addEventListener('click', clearVectors);
 document.getElementById('resetCrawl')?.addEventListener('click', resetCrawl);
 document.getElementById('resetIngest')?.addEventListener('click', resetIngest);
+document.getElementById('resetAllData')?.addEventListener('click', resetAllData);
 
 document.getElementById('exportJobLog').addEventListener('click', () => {
   exportCurrentLog(currentJobLogId, 'jobLogStatus');
@@ -2392,16 +2746,28 @@ document.getElementById('quarantineSelectedBtn')?.addEventListener('click', asyn
   if (!ids.length) return setStatus('dataValidationStatus', 'No artifacts selected', 'error');
   await quarantineArtifacts(ids);
 });
+document.getElementById('selectAllValidation')?.addEventListener('change', (event) => {
+  const isChecked = event.target.checked;
+  document.querySelectorAll('.validation-checkbox').forEach(cb => {
+    cb.checked = isChecked;
+  });
+  updateSelectedValidationCount();
+});
+document.getElementById('validateIngestBtn')?.addEventListener('click', validateIngest);
+document.getElementById('refreshIngestValidationBtn')?.addEventListener('click', loadIngestValidation);
 
 // Wire up ingest job event listeners
 document.getElementById('startIngestJobBtn')?.addEventListener('click', startIngestJob);
 document.getElementById('refreshIngestJobBtn')?.addEventListener('click', refreshIngestJobStatus);
 document.getElementById('clearIngestLogBtn')?.addEventListener('click', clearIngestLog);
+document.getElementById('saveIngestPerformance')?.addEventListener('click', saveIngestPerformanceSettings);
 
 window.loadAdminData = () => {
   loadConfigs();
   loadJobs();
   loadDataValidation();
+  loadIngestValidation();
+  loadIngestWorkerStatus();
 };
 
 window.resetAdminSession = () => {
@@ -2411,6 +2777,10 @@ window.resetAdminSession = () => {
   currentCrawlJobId = null;
   currentIngestJobId = null;
   currentJobLogId = null;
+  if (ingestWorkerPoller) {
+    clearTimeout(ingestWorkerPoller);
+    ingestWorkerPoller = null;
+  }
 
   // Close ingest job event source
   if (currentIngestJobEventSource) {
@@ -2426,15 +2796,17 @@ window.resetAdminSession = () => {
   setStatus('savePromptsStatus', '');
   setStatus('jobLogStatus', '');
   const crawlLog = document.getElementById('crawlLog');
-  const ingestLog = document.getElementById('ingestLog');
+  const ingestLog = document.getElementById('ingestQueueLog');
   const jobLog = document.getElementById('jobLog');
   const summaryPanel = document.getElementById('crawlSummary');
   const pillSummary = document.getElementById('crawlPillSummary');
   const ingestProgressContainer = document.getElementById('ingestProgressContainer');
+  const ingestSummaryCard = document.getElementById('ingestSummaryCard');
   if (crawlLog) crawlLog.textContent = '';
   if (ingestLog) ingestLog.textContent = '';
   if (jobLog) jobLog.textContent = '';
   if (summaryPanel) summaryPanel.style.display = 'none';
   if (pillSummary) pillSummary.style.display = 'none';
   if (ingestProgressContainer) ingestProgressContainer.style.display = 'none';
+  if (ingestSummaryCard) ingestSummaryCard.style.display = 'none';
 };

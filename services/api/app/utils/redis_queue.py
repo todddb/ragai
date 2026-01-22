@@ -21,6 +21,8 @@ async def push_job(job: Dict[str, Any]):
             "status": "queued",
             "total": job.get("chunks_estimate", 0),
             "done": 0,
+            "total_artifacts": 0,
+            "done_artifacts": 0,
             "attempts": 0,
             "created_at": datetime.utcnow().isoformat(),
             "job_type": job.get("type", "ingest"),

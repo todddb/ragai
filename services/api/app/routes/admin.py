@@ -1,6 +1,9 @@
 import asyncio
 import json
+import os
+import subprocess
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List
 from urllib.parse import urlparse
@@ -23,6 +26,91 @@ CONFIG_DIR = Path("/app/config")
 CANDIDATES_PATH = Path("/app/data/candidates/candidates.jsonl")
 PROCESSED_PATH = Path("/app/data/candidates/processed.json")
 AUTH_HINTS_PATH = Path("/app/data/logs/auth_hints.json")
+SUMMARY_DIR = Path("/app/data/logs/summaries")
+QUARANTINE_DIR = Path("/app/data/quarantine")
+QUARANTINE_AUDIT_LOG = Path("/app/data/logs/quarantine_audit.log")
+
+
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _run_validation(command: List[str]) -> None:
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode not in (0, 1):
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Validation failed. "
+                f"stdout: {result.stdout.strip()} stderr: {result.stderr.strip()}"
+            ),
+        )
+
+
+def _latest_summary(prefix: str) -> Path:
+    if not SUMMARY_DIR.exists():
+        return Path()
+    summaries = sorted(SUMMARY_DIR.glob(f"{prefix}*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return summaries[0] if summaries else Path()
+
+
+def _format_crawl_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
+    findings = payload.get("findings", [])
+    by_doc: Dict[str, Dict[str, Any]] = {}
+    severity_weight = {"low": 1, "medium": 2, "high": 3}
+    for finding in findings:
+        doc_id = finding.get("doc_id") or finding.get("artifact_dir") or "unknown"
+        current = by_doc.get(doc_id)
+        severity = finding.get("severity", "low")
+        weight = severity_weight.get(severity, 1)
+        if not current:
+            by_doc[doc_id] = {
+                "id": doc_id,
+                "url": finding.get("url", ""),
+                "title": finding.get("message", "Finding"),
+                "risk_score": weight,
+                "reason": finding.get("message", ""),
+                "severity": severity,
+                "artifact_dir": finding.get("artifact_dir"),
+            }
+        else:
+            current["risk_score"] = max(current["risk_score"], weight)
+            current["reason"] = f"{current['reason']}; {finding.get('message', '')}".strip("; ")
+    return {
+        "summary": {
+            "total": payload.get("artifacts_validated", 0),
+            "flagged": len(findings),
+            "quarantined": len(payload.get("quarantined", [])),
+        },
+        "validated": list(by_doc.values()),
+        "raw": payload,
+    }
+
+
+def _format_ingest_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
+    counts = payload.get("finding_counts", {}) or {}
+    findings = payload.get("findings", []) or []
+    return {
+        "summary": {
+            "total": sum(counts.values()),
+            "high": counts.get("high", 0),
+            "medium": counts.get("medium", 0),
+            "low": counts.get("low", 0),
+        },
+        "findings": findings,
+        "raw": payload,
+    }
+
+
+def _parse_redis_host_port() -> Dict[str, Any]:
+    redis_url = os.getenv("REDIS_HOST", "redis://redis:6379/0")
+    if redis_url.startswith("redis://"):
+        host_port = redis_url.replace("redis://", "").split("/")[0]
+        if ":" in host_port:
+            host, port = host_port.split(":", 1)
+            return {"host": host, "port": int(port)}
+        return {"host": host_port, "port": 6379}
+    return {"host": "redis", "port": 6379}
 
 
 def _load_tokens() -> List[str]:
@@ -390,6 +478,205 @@ async def reset_ingest() -> Dict[str, Any]:
         DB_PATH.unlink()
 
     return {"status": "ok", "deleted": deleted_items}
+
+
+@router.post("/reset/artifacts")
+async def reset_artifacts() -> Dict[str, Any]:
+    """Delete crawl artifacts, candidates, logs, and summaries."""
+    import shutil
+
+    deleted_items = []
+    artifacts_path = Path("/app/data/artifacts")
+    if artifacts_path.exists():
+        artifact_count = len(list(artifacts_path.glob("*/artifact.json")))
+        shutil.rmtree(artifacts_path)
+        artifacts_path.mkdir(parents=True, exist_ok=True)
+        deleted_items.append(f"{artifact_count} artifacts")
+
+    if CANDIDATES_PATH.exists():
+        CANDIDATES_PATH.unlink()
+        deleted_items.append("candidates.jsonl")
+
+    if PROCESSED_PATH.exists():
+        PROCESSED_PATH.unlink()
+        deleted_items.append("processed.json")
+
+    job_logs_path = Path("/app/data/logs/jobs")
+    if job_logs_path.exists():
+        log_count = len(list(job_logs_path.glob("*.log")))
+        shutil.rmtree(job_logs_path)
+        job_logs_path.mkdir(parents=True, exist_ok=True)
+        deleted_items.append(f"{log_count} job logs")
+
+    if SUMMARY_DIR.exists():
+        summary_count = len(list(SUMMARY_DIR.glob("*.json")))
+        shutil.rmtree(SUMMARY_DIR)
+        SUMMARY_DIR.mkdir(parents=True, exist_ok=True)
+        deleted_items.append(f"{summary_count} summaries")
+
+    if QUARANTINE_DIR.exists():
+        quarantine_count = len(list(QUARANTINE_DIR.glob("*")))
+        shutil.rmtree(QUARANTINE_DIR)
+        QUARANTINE_DIR.mkdir(parents=True, exist_ok=True)
+        deleted_items.append(f"{quarantine_count} quarantined artifacts")
+
+    return {"status": "ok", "deleted": deleted_items}
+
+
+@router.post("/reset/qdrant")
+async def reset_qdrant() -> Dict[str, Any]:
+    """Reset Qdrant collection and ingest metadata database."""
+    system_config = yaml.safe_load((CONFIG_DIR / "system.yml").read_text(encoding="utf-8")) or {}
+    qdrant_config = system_config.get("qdrant", {})
+    ollama_config = system_config.get("ollama", {})
+    collection = qdrant_config.get("collection")
+    qdrant_host = qdrant_config.get("host")
+    embedding_model = ollama_config.get("embedding_model")
+    ollama_host = ollama_config.get("host")
+    if not collection or not qdrant_host:
+        raise HTTPException(status_code=400, detail="Missing qdrant configuration")
+    client = QdrantClient(url=qdrant_host)
+    deleted_items = []
+
+    vector_size = None
+    try:
+        collections = client.get_collections().collections
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error connecting to Qdrant: {e}")
+
+    if any(col.name == collection for col in collections):
+        try:
+            info = client.get_collection(collection)
+            vector_size = info.config.params.vectors.size
+            count_before = info.points_count
+        except Exception:
+            count_before = 0
+        client.delete_collection(collection_name=collection)
+        deleted_items.append(f"{count_before} vectors from collection '{collection}'")
+    if vector_size is None:
+        if not embedding_model or not ollama_host:
+            raise HTTPException(status_code=400, detail="Missing embedding configuration")
+        vector_size = len(embed_text(ollama_host, embedding_model, "dimension probe"))
+    client.create_collection(
+        collection_name=collection,
+        vectors_config=rest.VectorParams(size=vector_size, distance=rest.Distance.COSINE),
+    )
+    client.create_payload_index(collection_name=collection, field_name="doc_id", field_schema="keyword")
+
+    if DB_PATH.exists():
+        DB_PATH.unlink()
+        deleted_items.append("ingest metadata.db")
+
+    return {"status": "ok", "deleted": deleted_items, "collection": collection}
+
+
+@router.post("/reset/all")
+async def reset_all() -> Dict[str, Any]:
+    """Delete all crawl artifacts, logs, quarantine, and reset Qdrant + ingest metadata."""
+    artifacts_result = await reset_artifacts()
+    qdrant_result = await reset_qdrant()
+    return {
+        "status": "ok",
+        "deleted": (artifacts_result.get("deleted", []) + qdrant_result.get("deleted", [])),
+    }
+
+
+@router.post("/validate/crawl")
+async def validate_crawl() -> Dict[str, Any]:
+    """Run crawl artifact validation and return summary."""
+    SUMMARY_DIR.mkdir(parents=True, exist_ok=True)
+    summary_path = SUMMARY_DIR / "validate_crawl_latest.json"
+    _run_validation(
+        [
+            "python",
+            "/app/tools/validate_crawl",
+            "--all",
+            "--json-out",
+            str(summary_path),
+        ]
+    )
+    if not summary_path.exists():
+        raise HTTPException(status_code=500, detail="Crawl validation summary not found")
+    payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    return _format_crawl_summary(payload)
+
+
+@router.get("/validate/crawl/summary")
+async def get_crawl_summary() -> Dict[str, Any]:
+    summary_path = SUMMARY_DIR / "validate_crawl_latest.json"
+    if not summary_path.exists():
+        summary_path = _latest_summary("validate_crawl_")
+    if not summary_path.exists():
+        raise HTTPException(status_code=404, detail="No crawl validation summary available")
+    payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    return _format_crawl_summary(payload)
+
+
+@router.post("/validate/ingest")
+async def validate_ingest() -> Dict[str, Any]:
+    """Run ingest validation and return summary."""
+    SUMMARY_DIR.mkdir(parents=True, exist_ok=True)
+    summary_path = SUMMARY_DIR / "validate_ingest_latest.json"
+    redis_info = _parse_redis_host_port()
+    _run_validation(
+        [
+            "python",
+            "/app/tools/validate_ingest.py",
+            "--data-integrity",
+            "--redis-host",
+            redis_info["host"],
+            "--redis-port",
+            str(redis_info["port"]),
+            "--config",
+            "/app/config/system.yml",
+            "--db",
+            "/app/data/ingest/metadata.db",
+        ]
+    )
+    latest = _latest_summary("validate_ingest_")
+    if not latest.exists():
+        raise HTTPException(status_code=500, detail="Ingest validation summary not found")
+    payload = json.loads(latest.read_text(encoding="utf-8"))
+    summary_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return _format_ingest_summary(payload)
+
+
+@router.get("/validate/ingest/summary")
+async def get_ingest_summary() -> Dict[str, Any]:
+    summary_path = SUMMARY_DIR / "validate_ingest_latest.json"
+    if not summary_path.exists():
+        summary_path = _latest_summary("validate_ingest_")
+    if not summary_path.exists():
+        raise HTTPException(status_code=404, detail="No ingest validation summary available")
+    payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    return _format_ingest_summary(payload)
+
+
+@router.post("/quarantine")
+async def quarantine_artifacts(payload: Dict[str, Any]) -> Dict[str, Any]:
+    ids = payload.get("ids", [])
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(status_code=400, detail="No artifact ids provided")
+    QUARANTINE_DIR.mkdir(parents=True, exist_ok=True)
+    QUARANTINE_AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+    quarantined = []
+    missing = []
+    for artifact_id in ids:
+        source_dir = Path("/app/data/artifacts") / artifact_id
+        if not source_dir.exists():
+            missing.append(artifact_id)
+            continue
+        destination = QUARANTINE_DIR / artifact_id
+        try:
+            source_dir.rename(destination)
+            quarantined.append(artifact_id)
+            with QUARANTINE_AUDIT_LOG.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    f"{_utcnow()} quarantine id={artifact_id} src={source_dir} dst={destination}\n"
+                )
+        except Exception as exc:
+            missing.append(f"{artifact_id}: {exc}")
+    return {"status": "ok", "quarantined": quarantined, "missing": missing}
 
 
 @router.get("/crawl/auth_hints")

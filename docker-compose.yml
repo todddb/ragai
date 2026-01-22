@@ -44,6 +44,7 @@ services:
       - ./config:/app/config
       - ./secrets:/app/secrets:ro
       - ./data:/app/data
+      - ./tools:/app/tools:ro
     ports:
       - "8000:8000"
     environment:
