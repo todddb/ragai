@@ -36,5 +36,5 @@ async def test_auth(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         selected = list(collect_required_profiles(crawler_config, allow_block).keys())
 
     selected = [name for name in selected if name in profiles]
-    results = run_auth_checks(selected, force=True)
+    results = await run_auth_checks(selected, force=True)
     return {"results": results}

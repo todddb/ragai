@@ -97,7 +97,7 @@
                 </div>
               </div>
 
-              <div class="field">
+              <div class="field" style="margin-top: 1.5rem;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                   <h3 class="section-heading" style="margin: 0; border: none; padding: 0;">Allowed URLs</h3>
                   <a href="#authProfiles" class="link" style="font-size: 0.85rem;" onclick="document.getElementById('playwrightEnabled').scrollIntoView({behavior: 'smooth', block: 'center'}); return false;">Manage Auth Profiles ↓</a>
@@ -135,10 +135,6 @@
                   <input id="blockedAddInput" type="text" placeholder="example.com" />
                   <button class="btn" id="blockedAddBtn">Add</button>
                 </div>
-              </div>
-
-              <div class="actions-row align-right">
-                <button class="btn btn-primary" id="triggerCrawl">Trigger Crawl</button>
               </div>
             </section>
 
@@ -215,6 +211,9 @@
                 </div>
               </div>
             </section>
+            <div class="actions-row align-right" style="margin-bottom: 1rem;">
+              <button class="btn btn-primary" id="triggerCrawl">Trigger Crawl</button>
+            </div>
             <div class="log-section">
               <div class="log-header">
                 <h3>Live Log</h3>
