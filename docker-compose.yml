@@ -28,6 +28,15 @@ services:
       - "6333:6333"
     restart: unless-stopped
 
+  redis:
+    image: redis:7
+    container_name: ragai-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+
   api:
     build: ./services/api
     container_name: ragai-api
@@ -40,9 +49,11 @@ services:
     environment:
       - OLLAMA_HOST=http://ollama:11434
       - QDRANT_HOST=http://qdrant:6333
+      - REDIS_HOST=redis://redis:6379/0
     depends_on:
       - ollama
       - qdrant
+      - redis
     restart: unless-stopped
 
   ingestor:
@@ -56,6 +67,23 @@ services:
       - QDRANT_HOST=http://qdrant:6333
     restart: "no"
 
+  ingestor-worker:
+    build: ./services/ingestor
+    container_name: ragai-ingestor-worker
+    command: python -m app.worker.queue_worker
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - QDRANT_HOST=http://qdrant:6333
+      - REDIS_HOST=redis://redis:6379/0
+    depends_on:
+      - ollama
+      - qdrant
+      - redis
+    restart: unless-stopped
+
   frontend:
     build: ./services/frontend
     container_name: ragai-frontend
@@ -68,3 +96,6 @@ services:
 networks:
   default:
     name: ragai-network
+
+volumes:
+  redis_data:
