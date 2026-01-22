@@ -178,7 +178,7 @@ structured_store:
 
 - `max_depth` - Higher values find more pages but take longer
 - `request_delay` - Politeness delay between requests
-- `playwright.enabled` - Enable for JavaScript-heavy or authenticated sites
+- `playwright.enabled` - Enable for JavaScript-heavy or authenticated sites (Playwright runs in the API container)
 - `playwright.auth_profiles` - Named authentication profiles (use `tools/capture_auth_state.py` to create)
 - `structured_store` - Excel/spreadsheet cell extraction and storage
 
@@ -225,9 +225,11 @@ Edit prompts to change behavior:
 - Citation style
 - Domain expertise
 
-After editing, restart the API: `./tools/ragaictl restart api`
+After editing, restart the API container: `./tools/ragaictl restart api`
 
 ## Crawl Management
+
+**Note**: Crawling is performed by the API container (via `services/api/app/workers/crawl_worker.py`). The old dedicated crawler service has been archived to `archive/crawler_service_DEPRECATED`. All crawl configuration is still managed via `config/crawler.yml` and the admin UI.
 
 ### Starting a Crawl
 
@@ -249,7 +251,7 @@ Logs stream in real-time, showing each URL as it's fetched.
 
 ### Stopping a Crawl
 
-Click "Stop Crawl" in the admin console (if implemented), or restart the API service:
+Click "Stop Crawl" in the admin console (if implemented), or restart the API container to interrupt the current crawl:
 
 ```bash
 ./tools/ragaictl restart api
@@ -275,13 +277,14 @@ After a crawl:
 
 - Reduce `max_depth` in `crawler.yml`
 - Set `max_pages` limit
-- Enable `playwright` only for domains that need it
+- Enable `playwright` only for domains that need it (Playwright runs inside the API container)
 - Check network connectivity to target sites
+- Consider API container resource limits if using Docker
 
 **Missing content:**
 
-- Some sites may require authentication (use Playwright)
-- JavaScript-heavy sites may need Playwright
+- Some sites may require authentication (use Playwright auth profiles in `config/crawler.yml`)
+- JavaScript-heavy sites may need Playwright (enabled per-URL via allow rules)
 - Check `robots.txt` on target site (if `respect_robots_txt: true`)
 
 ## Ingest Management

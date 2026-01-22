@@ -252,13 +252,15 @@ playwright:
   navigation_timeout_ms: 60000
 ```
 
-### 4. Restart API Service
+### 4. Restart API Container
 
-Playwright is integrated into the API service. Restart to apply changes:
+Playwright is integrated into the API container (which handles crawling). Restart to apply changes:
 
 ```bash
 ./tools/ragaictl restart api
 ```
+
+**Note**: Crawling is now performed by the API container, not a separate crawler service. The old crawler service has been archived to `archive/crawler_service_DEPRECATED`.
 
 ## Verification
 

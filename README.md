@@ -39,9 +39,11 @@ Before your first crawl, update `config/allow_block.yml` with your `seed_urls` a
 
 ## Services
 
-- **API**: FastAPI orchestrator (chat, admin, config, crawling)
+- **API**: FastAPI orchestrator (chat, admin, config, crawling via integrated worker)
 - **Ingestor**: Embedding + Qdrant upsert
 - **Frontend**: Static HTML/CSS/JS UI
+
+**Note**: The old dedicated crawler service has been archived to `archive/crawler_service_DEPRECATED`. Crawling is now performed directly by the API container using the crawl worker (`services/api/app/workers/crawl_worker.py`). Crawler behavior and Playwright authentication profiles are still configured via `config/crawler.yml`.
 
 ## Configuration
 
@@ -96,15 +98,15 @@ playwright:
   navigation_timeout_ms: 60000
 ```
 
-### 3) Restart the API service
+### 3) Restart the API container
 
-Playwright is integrated into the API service. Restart to apply changes:
+Playwright is integrated into the API container (which handles crawling). Restart to apply changes:
 
 ```bash
 ./tools/ragaictl restart api
 ```
 
-Run a crawl and confirm logs include `FETCH=playwright` for `policy.byu.edu` URLs.
+Run a crawl via the admin console and confirm logs include `FETCH=playwright` for `policy.byu.edu` URLs.
 
 ## GPU Acceleration (Ollama + NVIDIA)
 
