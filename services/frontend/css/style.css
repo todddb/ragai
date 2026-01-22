@@ -109,6 +109,16 @@ header {
   background: var(--primary-blue-hover);
 }
 
+.btn-danger {
+  background: var(--status-error);
+  color: var(--bg-white);
+  border-color: var(--status-error);
+}
+
+.btn-danger:hover {
+  background: #DC2626;
+}
+
 .nav-icon {
   width: 40px;
   height: 40px;
@@ -1322,4 +1332,28 @@ html.sidebar-collapsed .sidebar #sidebarToggle {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.validation-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.validation-row {
+  display: flex;
+  align-items: center;
+  padding: var(--spacing-sm);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-white);
+}
+
+.validation-row label {
+  width: 100%;
+  cursor: pointer;
+}
+
+.validation-checkbox {
+  cursor: pointer;
 }

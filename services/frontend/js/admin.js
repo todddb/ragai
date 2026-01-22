@@ -1902,6 +1902,159 @@ async function resetIngest() {
   }
 }
 
+// Validation & Quarantine functions
+async function loadDataValidation() {
+  const statusTarget = 'dataValidationStatus';
+  setStatus(statusTarget, 'Loading validation summary...');
+  try {
+    const resp = await fetch(`${API_BASE}/api/admin/validation_summary`);
+    if (!resp.ok) {
+      setStatus(statusTarget, 'Error loading validation summary', 'error');
+      return;
+    }
+    const payload = await resp.json();
+    renderValidationSummary(payload.summary);
+    renderValidationList(payload.validated || []);
+    setStatus(statusTarget, 'Loaded', 'success');
+  } catch (err) {
+    setStatus(statusTarget, `Error: ${err.message}`, 'error');
+  }
+}
+
+async function validateArtifacts() {
+  const statusTarget = 'dataValidationStatus';
+  setStatus(statusTarget, 'Validating artifacts...');
+  disableButtons(['validateArtifactsBtn', 'quarantineSelectedBtn']);
+  try {
+    const resp = await fetch(`${API_BASE}/api/admin/validate_artifacts`, { method: 'POST' });
+    if (!resp.ok) {
+      setStatus(statusTarget, 'Validation failed', 'error');
+      enableButtons(['validateArtifactsBtn', 'quarantineSelectedBtn']);
+      return;
+    }
+    const result = await resp.json();
+    renderValidationSummary(result.summary);
+    renderValidationList(result.validated || []);
+    setStatus(statusTarget, 'Validation complete', 'success');
+  } catch (err) {
+    setStatus(statusTarget, `Error: ${err.message}`, 'error');
+  } finally {
+    enableButtons(['validateArtifactsBtn', 'quarantineSelectedBtn']);
+  }
+}
+
+function renderValidationSummary(summary = {}) {
+  const el = document.getElementById('validationSummary');
+  if (!el) return;
+  el.innerHTML = `
+    <div>
+      <div class="field-label">Total examined</div>
+      <div class="info-value">${summary.total || 0}</div>
+    </div>
+    <div>
+      <div class="field-label">Flagged</div>
+      <div class="info-value">${summary.flagged || 0}</div>
+    </div>
+    <div>
+      <div class="field-label">Quarantined</div>
+      <div class="info-value">${summary.quarantined || 0}</div>
+    </div>
+  `;
+}
+
+function renderValidationList(list = []) {
+  const container = document.getElementById('validationList');
+  if (!container) return;
+  container.innerHTML = '';
+  list.forEach(item => {
+    const row = document.createElement('div');
+    row.className = 'validation-row';
+    row.innerHTML = `
+      <label style="display:flex; gap:8px; align-items:center;">
+        <input type="checkbox" class="validation-checkbox" data-artifact-id="${item.id}" />
+        <div style="flex:1">
+          <div style="font-weight:600;">${escapeHtml(item.title || item.url)}</div>
+          <div style="font-size:0.85rem;color:var(--text-secondary)">${escapeHtml(item.url)}</div>
+        </div>
+        <div style="min-width:160px; text-align:right;">
+          <div style="font-weight:600">${item.risk_score ?? '—'}</div>
+          <div style="font-size:0.85rem">${escapeHtml(item.reason || '')}</div>
+          <div class="actions-row" style="margin-top:6px;">
+            <button class="btn btn-small" data-action="quarantine" data-id="${item.id}">Quarantine</button>
+          </div>
+        </div>
+      </label>
+    `;
+    container.appendChild(row);
+  });
+
+  // wire up single-item quarantine buttons
+  container.querySelectorAll('button[data-action="quarantine"]').forEach(btn => {
+    btn.addEventListener('click', async (ev) => {
+      const id = btn.dataset.id;
+      await quarantineArtifacts([id]);
+    });
+  });
+}
+
+async function quarantineArtifacts(ids = []) {
+  if (!ids.length) return;
+  const statusTarget = 'dataValidationStatus';
+  setStatus(statusTarget, `Quarantining ${ids.length} artifact(s)...`);
+  try {
+    const resp = await fetch(`${API_BASE}/api/admin/quarantine_artifacts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids })
+    });
+    if (!resp.ok) {
+      setStatus(statusTarget, 'Error while quarantining', 'error');
+      return;
+    }
+    const result = await resp.json();
+    // assume server returns list of quarantined ids
+    const quarantined = result.quarantined || ids;
+    // update UI rows
+    quarantined.forEach(id => {
+      const checkbox = document.querySelector(`.validation-checkbox[data-artifact-id="${id}"]`);
+      if (checkbox) {
+        const row = checkbox.closest('.validation-row');
+        if (row) {
+          row.style.opacity = '0.5';
+          const tag = document.createElement('span');
+          tag.className = 'status-pill';
+          tag.textContent = 'Quarantined';
+          row.appendChild(tag);
+        }
+      }
+    });
+    setStatus(statusTarget, `Quarantined ${quarantined.length} artifact(s)`, 'success');
+    // refresh summary
+    await loadDataValidation();
+  } catch (err) {
+    setStatus(statusTarget, `Error: ${err.message}`, 'error');
+  }
+}
+
+/* Helper functions */
+function disableButtons(ids) {
+  ids.forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) btn.setAttribute('disabled', 'disabled');
+  });
+}
+
+function enableButtons(ids) {
+  ids.forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) btn.removeAttribute('disabled');
+  });
+}
+
+function escapeHtml(s = '') {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 document.getElementById('unlockButton').addEventListener('click', unlock);
 document.getElementById('adminToken').addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
@@ -2069,9 +2222,20 @@ document.getElementById('jobTable').addEventListener('click', async (event) => {
   }
 });
 
+// Wire up validation & quarantine event listeners
+document.getElementById('validateArtifactsBtn')?.addEventListener('click', validateArtifacts);
+document.getElementById('refreshValidationBtn')?.addEventListener('click', loadDataValidation);
+document.getElementById('quarantineSelectedBtn')?.addEventListener('click', async () => {
+  const checkboxes = Array.from(document.querySelectorAll('.validation-checkbox:checked'));
+  const ids = checkboxes.map(cb => cb.dataset.artifactId);
+  if (!ids.length) return setStatus('dataValidationStatus', 'No artifacts selected', 'error');
+  await quarantineArtifacts(ids);
+});
+
 window.loadAdminData = () => {
   loadConfigs();
   loadJobs();
+  loadDataValidation();
 };
 
 window.resetAdminSession = () => {

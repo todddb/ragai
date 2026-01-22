@@ -324,6 +324,19 @@
           </div>
 
           <div id="data" class="tab-content" style="display:none;">
+            <div class="panel-card" id="dataValidationPanel">
+              <h4>Validate Crawl Artifacts</h4>
+              <div class="actions-row">
+                <button class="btn btn-primary" id="validateArtifactsBtn">Validate Artifacts</button>
+                <button class="btn" id="refreshValidationBtn">Refresh</button>
+                <button class="btn btn-danger" id="quarantineSelectedBtn">Quarantine Selected</button>
+                <span id="dataValidationStatus" class="status-text"></span>
+              </div>
+
+              <div id="validationSummary" class="info-grid" style="margin-top:12px;"></div>
+              <div id="validationList" class="validation-list" style="margin-top:12px;"></div>
+            </div>
+
             <div class="panel-card">
               <h2>Data Management</h2>
               <p class="settings-help">
