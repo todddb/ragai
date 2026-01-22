@@ -1,0 +1,506 @@
+#!/usr/bin/env python3
+"""
+tools/validate_crawl
+
+Validate crawl artifacts and log results as a first-class job.
+
+Enhancements in this regenerated version:
+ - timezone-aware timestamps
+ - evidence snippet for LOGIN_TEXT (first_match_snippet)
+ - tightened suspicious patterns (fewer false positives)
+ - MALFORMED_URL detection with evidence (original malformed url)
+ - safer logging / permission-handling when writing summary files
+ - summarize / rollups (counts by code, top hosts)
+ - --quarantine option: move flagged artifacts to data/artifacts_quarantine (attempts sudo when needed)
+ - --json-out option: write summary also to specified path
+ - default locations: jobs -> data/logs/jobs, summary -> data/logs/summaries
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import random
+import re
+import sys
+import uuid
+import subprocess
+from dataclasses import dataclass, asdict
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
+from collections import Counter
+from urllib.parse import urlparse, urljoin
+
+# -----------------------------
+# Config / heuristics
+# -----------------------------
+
+DEFAULT_SUSPICIOUS_PATTERNS = [
+    # keep explicit login / auth flows and path-based hits; avoid generic words that cause false positives
+    r"cas/login",
+    r"/cas\b",
+    r"shibboleth",
+    r"\b(saml|oauth|openid)\b",
+    r"please\s+sign\s+in",
+    r"please\s+sign\s+in\s+to\s+continue",
+    r"you\s+must\s+(log\s*in|sign\s*in)\b",
+    r"redirecting\s+to\s+.*login",
+    r"(/secure/)|(/login\b)|(/signin\b)",
+]
+
+DEFAULT_BAD_URL_PATTERNS = [
+    r"https?://[^/]+/https?:/[^/]",
+    r"https?://[^/]+/https?:[^/]",
+    r"https?:/[^/]",
+    r"http?:/[^/]",
+]
+
+DEFAULT_BOILERPLATE_HINTS = [
+    "skip to main content",
+    "privacy policy",
+    "terms of use",
+    "copyright",
+    "all rights reserved",
+]
+
+SEVERITY_ORDER = {"low": 1, "medium": 2, "high": 3}
+
+
+@dataclass
+class Finding:
+    severity: str
+    code: str
+    message: str
+    doc_id: Optional[str] = None
+    url: Optional[str] = None
+    artifact_dir: Optional[str] = None
+    evidence: Optional[str] = None
+
+
+# -----------------------------
+# Helpers
+# -----------------------------
+
+
+def now_utc() -> str:
+    # timezone-aware UTC timestamp with Z
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def load_json(path: Path) -> Dict[str, Any]:
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def iter_jsonl_texts(path: Path, max_lines: int) -> Iterable[str]:
+    with path.open("r", encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            if i >= max_lines:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                yield ""
+                continue
+            text = obj.get("text") or obj.get("content") or ""
+            yield text if isinstance(text, str) else ""
+
+
+def normalize_ws(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip().lower()
+
+
+def compile_patterns(pats: List[str]) -> List[re.Pattern]:
+    return [re.compile(p, re.IGNORECASE) for p in pats]
+
+
+def score_repetition(text: str) -> float:
+    lines = [normalize_ws(l) for l in text.splitlines() if normalize_ws(l)]
+    if len(lines) < 10:
+        return 0.0
+    freq: Dict[str, int] = {}
+    for l in lines:
+        freq[l] = freq.get(l, 0) + 1
+    return max(freq.values()) / len(lines)
+
+
+def severity_at_least(sev: str, threshold: str) -> bool:
+    return SEVERITY_ORDER.get(sev, 0) >= SEVERITY_ORDER.get(threshold, 999)
+
+
+def first_match_snippet(text: str, pat: re.Pattern, ctx: int = 80) -> str:
+    m = pat.search(text)
+    if not m:
+        return ""
+    start = max(0, m.start() - ctx)
+    end = min(len(text), m.end() + ctx)
+    return text[start:end].replace("\n", " ")
+
+
+def summarize_findings(findings: List[Finding]) -> Dict[str, Any]:
+    codes = Counter(f.code for f in findings)
+    severities = Counter(f.severity for f in findings)
+    hosts = Counter()
+    for f in findings:
+        if f.url:
+            try:
+                hosts[urlparse(f.url).netloc.lower()] += 1
+            except Exception:
+                hosts["(bad_url_parse)"] += 1
+    return {
+        "counts_by_code": dict(codes.most_common(50)),
+        "counts_by_severity": dict(severities),
+        "top_hosts": dict(hosts.most_common(50)),
+    }
+
+
+def sanitize_malformed_url(url: str) -> Optional[str]:
+    """
+    If url looks like: https://host/https:/otherhost/... extract inner absolute URL.
+    Return the extracted URL or None if nothing to salvage.
+    """
+    if not url:
+        return None
+    m = re.search(r"https?://[^/]+/(https?://.*)", url)
+    if m:
+        return m.group(1)
+    return None
+
+
+def try_move_with_sudo(src: str, dst_dir: str) -> bool:
+    """
+    Attempt to move src into dst_dir. If a PermissionError occurs, call sudo mv.
+    Return True on success.
+    """
+    try:
+        dst = os.path.join(dst_dir, os.path.basename(src))
+        os.makedirs(dst_dir, exist_ok=True)
+        os.rename(src, dst)
+        return True
+    except PermissionError:
+        # fall back to sudo
+        try:
+            subprocess.check_call(["sudo", "mv", src, dst_dir])
+            return True
+        except subprocess.CalledProcessError:
+            return False
+    except Exception:
+        return False
+
+
+# -----------------------------
+# Validation logic
+# -----------------------------
+
+
+def validate_artifact(
+    artifact_dir: Path,
+    suspicious: List[re.Pattern],
+    bad_urls: List[re.Pattern],
+    max_chunks: int,
+    min_chunk_chars: int,
+    repetition_threshold: float,
+) -> List[Finding]:
+
+    findings: List[Finding] = []
+    artifact_json = artifact_dir / "artifact.json"
+    chunks_jsonl = artifact_dir / "chunks.jsonl"
+
+    if not artifact_json.exists():
+        return [
+            Finding(
+                severity="high",
+                code="MISSING_ARTIFACT_JSON",
+                message="artifact.json missing",
+                artifact_dir=str(artifact_dir),
+            )
+        ]
+
+    meta = load_json(artifact_json)
+    doc_id = meta.get("doc_id") or meta.get("id") or artifact_dir.name
+    url = meta.get("url") or meta.get("source_url") or ""
+
+    # URL checks
+    if not url:
+        findings.append(
+            Finding(
+                severity="high",
+                code="MISSING_URL",
+                message="artifact missing url",
+                doc_id=doc_id,
+                artifact_dir=str(artifact_dir),
+            )
+        )
+    else:
+        for p in bad_urls:
+            if p.search(url):
+                findings.append(
+                    Finding(
+                        severity="high",
+                        code="MALFORMED_URL",
+                        message="URL appears malformed (bad join)",
+                        doc_id=doc_id,
+                        url=url,
+                        artifact_dir=str(artifact_dir),
+                        evidence=url,
+                    )
+                )
+                # try to salvage the inner url as evidence (not modifying artifact.json here)
+                salv = sanitize_malformed_url(url)
+                if salv:
+                    findings[-1].evidence = salv
+                break
+
+    if not chunks_jsonl.exists():
+        findings.append(
+            Finding(
+                severity="high",
+                code="MISSING_CHUNKS",
+                message="chunks.jsonl missing",
+                doc_id=doc_id,
+                url=url,
+                artifact_dir=str(artifact_dir),
+            )
+        )
+        return findings
+
+    texts = list(iter_jsonl_texts(chunks_jsonl, max_chunks))
+    combined = "\n".join(texts)
+    combined_norm = normalize_ws(combined)
+
+    # Tiny chunks / weak extraction
+    tiny = sum(1 for t in texts if len(t.strip()) < min_chunk_chars)
+    total_chars = sum(len(t.strip()) for t in texts)
+
+    if total_chars < 600:
+        findings.append(
+            Finding(
+                severity="high",
+                code="LOW_TOTAL_TEXT",
+                message=f"total extracted text is very small ({total_chars} chars across {len(texts)} chunks)",
+                doc_id=doc_id,
+                url=url,
+                artifact_dir=str(artifact_dir),
+            )
+        )
+    elif tiny >= max(6, int(len(texts) * 0.85)):
+        findings.append(
+            Finding(
+                severity="medium",
+                code="MOSTLY_TINY_CHUNKS",
+                message=f"{tiny}/{len(texts)} chunks under {min_chunk_chars} chars (total={total_chars})",
+                doc_id=doc_id,
+                url=url,
+                artifact_dir=str(artifact_dir),
+            )
+        )
+
+    # Login / auth text detection (use stricter patterns)
+    for p in suspicious:
+        m = p.search(combined_norm)
+        if m:
+            findings.append(
+                Finding(
+                    severity="high",
+                    code="LOGIN_TEXT",
+                    message="login/auth text detected in content",
+                    doc_id=doc_id,
+                    url=url,
+                    artifact_dir=str(artifact_dir),
+                    evidence=first_match_snippet(combined_norm, p),
+                )
+            )
+            break
+
+    # If url path looks authenticator-ish, raise a finding even if body didn't match strongly
+    try:
+        if url and re.search(r"(/secure/)|(/login\b)|(/signin\b)", url, re.I):
+            findings.append(
+                Finding(
+                    severity="high",
+                    code="LOGIN_PATH",
+                    message="URL path indicates secure/login area",
+                    doc_id=doc_id,
+                    url=url,
+                    artifact_dir=str(artifact_dir),
+                )
+            )
+    except Exception:
+        pass
+
+    # Boilerplate hints (low severity)
+    hints = [h for h in DEFAULT_BOILERPLATE_HINTS if h in combined_norm]
+    if hints:
+        findings.append(
+            Finding(
+                severity="low",
+                code="BOILERPLATE_HINTS",
+                message=f"boilerplate hints found: {', '.join(hints[:3])}",
+                doc_id=doc_id,
+                url=url,
+                artifact_dir=str(artifact_dir),
+            )
+        )
+
+    # Repetition
+    rep = score_repetition(combined)
+    if rep >= repetition_threshold:
+        findings.append(
+            Finding(
+                severity="medium",
+                code="HIGH_REPETITION",
+                message=f"repetition ratio {rep:.2f}",
+                doc_id=doc_id,
+                url=url,
+                artifact_dir=str(artifact_dir),
+            )
+        )
+
+    return findings
+
+
+# -----------------------------
+# Main
+# -----------------------------
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--artifacts-dir", default="data/artifacts")
+    ap.add_argument("--sample", type=int, default=15)
+    ap.add_argument("--all", action="store_true")
+    ap.add_argument("--seed", type=int)
+    ap.add_argument("--max-chunks", type=int, default=25)
+    ap.add_argument("--min-chunk-chars", type=int, default=40)
+    ap.add_argument("--repetition-threshold", type=float, default=0.30)
+    ap.add_argument("--fail-on", choices=["low", "medium", "high"], default="high")
+    ap.add_argument("--quarantine", action="store_true", help="move offending artifact dirs to data/artifacts_quarantine (uses sudo if necessary)")
+    ap.add_argument("--json-out", help="write summary JSON to this path in addition to default")
+    args = ap.parse_args()
+
+    job_id = f"validate_{uuid.uuid4()}"
+    started = now_utc()
+
+    # Log dirs
+    jobs_dir = Path("data/logs/jobs")
+    summary_dir = Path("data/logs/summaries")
+    jobs_dir.mkdir(parents=True, exist_ok=True)
+    summary_dir.mkdir(parents=True, exist_ok=True)
+
+    job_log_path = jobs_dir / f"{job_id}.log"
+    summary_path = summary_dir / f"{job_id}.json"
+
+    def log(msg: str):
+        line = f"[{now_utc()}] {msg}"
+        print(line)
+        try:
+            job_log_path.open("a", encoding="utf-8").write(line + "\n")
+        except PermissionError:
+            # best-effort: attempt sudo tee append
+            try:
+                subprocess.run(["sudo", "tee", "-a", str(job_log_path)], input=(line + "\n").encode("utf-8"))
+            except Exception:
+                pass
+
+    log(f"Job started ({job_id})")
+
+    artifact_root = Path(args.artifacts_dir)
+    artifact_dirs = sorted(p.parent for p in artifact_root.glob("*/artifact.json"))
+
+    if not artifact_dirs:
+        log("No artifacts found")
+        return 2
+
+    if args.seed is not None:
+        random.seed(args.seed)
+
+    sample_dirs = artifact_dirs if args.all else random.sample(artifact_dirs, min(args.sample, len(artifact_dirs)))
+
+    suspicious = compile_patterns(DEFAULT_SUSPICIOUS_PATTERNS)
+    bad_urls = compile_patterns(DEFAULT_BAD_URL_PATTERNS)
+
+    findings: List[Finding] = []
+    clean = 0
+    quarantined: List[str] = []
+
+    for d in sample_dirs:
+        fnds = validate_artifact(d, suspicious, bad_urls, args.max_chunks, args.min_chunk_chars, args.repetition_threshold)
+        if fnds:
+            findings.extend(fnds)
+            log(f"Issues in {d.name}: {len(fnds)} finding(s)")
+            if args.quarantine:
+                dst_dir = "data/artifacts_quarantine"
+                ok = try_move_with_sudo(str(d), dst_dir)
+                if ok:
+                    quarantined.append(str(d))
+                    log(f"Quarantined {d.name} -> {dst_dir}")
+                else:
+                    log(f"Failed to quarantine {d.name} (permission error)")
+        else:
+            clean += 1
+
+    counts = {"low": 0, "medium": 0, "high": 0}
+    for f in findings:
+        counts[f.severity] += 1
+
+    summary = {
+        "job_id": job_id,
+        "started_at": started,
+        "finished_at": now_utc(),
+        "artifacts_discovered": len(artifact_dirs),
+        "artifacts_validated": len(sample_dirs),
+        "clean_artifacts": clean,
+        "finding_counts": counts,
+        "findings": [asdict(f) for f in findings],
+    }
+
+    rollups = summarize_findings(findings)
+
+    # write rollups into summary
+    summary["rollups"] = rollups
+    if quarantined:
+        summary["quarantined"] = quarantined
+
+    # Try write summary (permission-safe)
+    try:
+        summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        log(f"Summary written to {summary_path}")
+    except PermissionError as e:
+        log(f"ERROR: cannot write summary file ({summary_path}): {e}")
+        # attempt sudo tee fallback
+        try:
+            subprocess.run(["sudo", "tee", str(summary_path)], input=json.dumps(summary, indent=2).encode("utf-8"))
+            log(f"Summary written to {summary_path} (via sudo)")
+        except Exception as e2:
+            log(f"ERROR: sudo fallback failed: {e2}")
+
+    if args.json_out:
+        try:
+            Path(args.json_out).write_text(json.dumps(summary, indent=2), encoding="utf-8")
+            log(f"Also wrote JSON output to {args.json_out}")
+        except Exception as e:
+            log(f"Could not write additional json-out {args.json_out}: {e}")
+
+    # Pretty rollup logs
+    log("Top finding codes:")
+    for k, v in rollups["counts_by_code"].items():
+        log(f"  {k}: {v}")
+
+    log("Top hosts:")
+    for k, v in rollups["top_hosts"].items():
+        log(f"  {k}: {v}")
+
+    fail = any(severity_at_least(f.severity, args.fail_on) for f in findings)
+    log(f"Job completed (exit={'1' if fail else '0'})")
+
+    return 1 if fail else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
