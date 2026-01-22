@@ -134,19 +134,25 @@ def print_auth_hints(hints: dict[str, Any]) -> None:
         if host:
             redirect_hosts[host] = redirect_hosts.get(host, 0) + count
 
+    print("\n" + "=" * 70)
+    print("AUTH HINTS (from previous crawl logs: data/logs/auth_hints.json)")
+    print("=" * 70)
+
     if redirect_hosts:
         frequent = ", ".join(sorted(redirect_hosts.keys()))
-        print("\nAuth hints (from previous crawl attempts):")
-        print("  We observed redirects to common authentication endpoints:")
-        print(f"    {frequent}")
-        print("  This usually indicates pages required login (CAS/MFA) or were behind an auth gateway.")
+        print("\nWe found these login/SSO redirects while crawling")
+        print("(sites likely need authentication):")
+        print(f"  {frequent}")
 
     suggested_domains = ", ".join(sorted(by_domain.keys()))
     if suggested_domains:
-        print("\n  Domains that most often appeared to require authentication:")
-        print(f"    {suggested_domains}")
-        print("  These domains may share the same login flow, so one auth profile *might* cover multiple.")
-        print("  Recommendation: start with a few domains, add a protected test URL per domain, and validate.\n")
+        print("\nThese domains showed similar auth behavior and may use the")
+        print("same auth profile:")
+        print(f"  {suggested_domains}")
+        print("\nRecommendation: Start with one domain, add test URLs to validate,")
+        print("then add more domains if they share the same login flow.")
+
+    print("=" * 70 + "\n")
 
 
 # ---------- Profile model ----------
@@ -397,38 +403,64 @@ def main() -> None:
         while True:
             input("\nWhen you are fully logged in and can see normal content, press ENTER to validate + save... ")
 
-            # If no test urls, skip validation
-            ok = True
-            failures: list[str] = []
-            if prof.test_urls:
-                ok, failures = validate_urls(page, prof.test_urls)
+            try:
+                # If no test urls, skip validation
+                ok = True
+                failures: list[str] = []
+                if prof.test_urls:
+                    ok, failures = validate_urls(page, prof.test_urls)
 
-            if not ok:
-                print("\n❌ Validation failed (auth likely NOT usable for crawling):")
-                for f in failures:
-                    print(f"  - {f}")
-                print("\nTry these (in the SAME Playwright window) then retry:")
-                print("  - Re-login and ensure you end on the target domain (not cas.byu.edu).")
-                print("  - Open the exact protected URL(s) and confirm you can see the real page.")
-                print("  - If it keeps bouncing, CAS session may not be persisting (cookies/SameSite).")
+                if not ok:
+                    print("\n❌ Validation failed (auth likely NOT usable for crawling):")
+                    for f in failures:
+                        print(f"  - {f}")
+                    print("\nTry these (in the SAME Playwright window) then retry:")
+                    print("  - Re-login and ensure you end on the target domain (not cas.byu.edu).")
+                    print("  - Open the exact protected URL(s) and confirm you can see the real page.")
+                    print("  - If it keeps bouncing, CAS session may not be persisting (cookies/SameSite).")
 
-                ans = input("\nRetry validation after you fix login? [y/N]: ").strip().lower()
-                if ans == "y":
-                    continue
+                    ans = input("\nRetry validation after you fix login? [y/N]: ").strip().lower()
+                    if ans == "y":
+                        continue
 
-                print("\nNot saving state.")
+                    print("\nNot saving state.")
+                    context.close()
+                    browser.close()
+                    raise SystemExit(2)
+
+                # Save state only after successful validation (or if user gave no test urls)
+                context.storage_state(path=str(out_path))
+                print(f"\n✅ Saved auth state to: {out_path}")
+
+                dump_state_summary(out_path, prof.use_for_domains)
                 context.close()
                 browser.close()
-                raise SystemExit(2)
+                break
 
-            # Save state only after successful validation (or if user gave no test urls)
-            context.storage_state(path=str(out_path))
-            print(f"\n✅ Saved auth state to: {out_path}")
-
-            dump_state_summary(out_path, prof.use_for_domains)
-            context.close()
-            browser.close()
-            break
+            except Exception as e:
+                # Check if it's a TargetClosedError or similar browser-closed error
+                error_msg = str(e).lower()
+                if "closed" in error_msg or "target" in error_msg:
+                    print("\n" + "=" * 70)
+                    print("❌ ERROR: Browser window was closed before validation")
+                    print("=" * 70)
+                    print("\nIt looks like the browser window was closed before validation.")
+                    print("\nIMPORTANT:")
+                    print("  • Do NOT close the browser window manually")
+                    print("  • Keep the browser window open during the entire process")
+                    print("  • Return to this terminal and press ENTER to continue")
+                    print("  • The script will validate and save your auth state")
+                    print("\nAuth state was NOT saved. Please run the script again.")
+                    print("=" * 70 + "\n")
+                    try:
+                        context.close()
+                        browser.close()
+                    except:
+                        pass
+                    raise SystemExit(2)
+                else:
+                    # Re-raise unexpected errors
+                    raise
 
     print("\nDone.")
 
