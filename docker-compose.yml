@@ -45,17 +45,6 @@ services:
       - qdrant
     restart: unless-stopped
 
-  crawler:
-    build: ./services/crawler
-    container_name: ragai-crawler
-    volumes:
-      - ./config:/app/config
-      - ./secrets:/app/secrets:ro
-      - ./data:/app/data
-    environment:
-      - API_HOST=http://api:8000
-    restart: "no"
-
   ingestor:
     build: ./services/ingestor
     container_name: ragai-ingestor
