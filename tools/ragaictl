@@ -19,6 +19,9 @@ Commands:
   restart [service...]                  Restart services (default: all), then health check
   export [scope] [--max-lines N]        Export project snapshot (replaces dump_project)
 
+  change-owner [path...]                Fix ownership on bind-mounted dirs (default: data config qdrant_storage ollama_models)
+                                        Requires sudo; prompts only when you run this command.
+
 Export scopes:
   all-code   (default, no data, no secrets)
   all        (includes data, excludes secrets)
@@ -30,6 +33,7 @@ Export scopes:
 Notes:
   - Secrets are always excluded from exports.
   - 'stop' keeps containers; 'down' removes them.
+  - Ownership fixes are now manual via: ragaictl change-owner
 EOF
 }
 
@@ -107,27 +111,40 @@ check_health() {
   [[ "$api_status" == "ok" ]]
 }
 
-fix_ownership() {
-  # Only chown bind-mounted directories that commonly get root-owned files.
-  # Avoid blanket chown of the whole repo.
-  local targets=(data config qdrant_storage ollama_models)
+# Default ownership targets (bind-mounted dirs that commonly get root-owned files)
+default_owner_targets() {
+  echo "data config qdrant_storage ollama_models"
+}
 
-  # Only run if those directories exist
+change_owner_cmd() {
+  # If user passes paths, use those; else use defaults.
+  local targets=()
+  if [[ $# -gt 0 ]]; then
+    targets=("$@")
+  else
+    # shellcheck disable=SC2207
+    targets=($(default_owner_targets))
+  fi
+
+  # Only run if those directories/files exist
   local existing=()
   for t in "${targets[@]}"; do
     [[ -e "$t" ]] && existing+=("$t")
   done
 
   if [[ ${#existing[@]} -eq 0 ]]; then
+    echo "ℹ️  No matching paths exist to chown."
     return 0
   fi
 
   echo "🧹 Fixing ownership on: ${existing[*]}"
   if command -v sudo >/dev/null 2>&1; then
-    sudo chown -R "$USER:$USER" "${existing[@]}" || true
+    sudo chown -R "$USER:$USER" "${existing[@]}"
+    echo "✅ Ownership updated"
   else
-    echo "⚠️  sudo not available; skipping chown. You may need:"
+    echo "⚠️  sudo not available; cannot chown automatically. You may need:"
     echo "    sudo chown -R $USER:$USER ${existing[*]}"
+    return 1
   fi
   echo ""
 }
@@ -192,7 +209,10 @@ setup_new() {
   docker compose ps
   echo ""
 
-  fix_ownership
+  # NOTE: Ownership is no longer auto-fixed here to avoid sudo prompts/hangs.
+  echo "ℹ️  If you hit permission issues with bind mounts, run:"
+  echo "    ./tools/ragaictl change-owner"
+  echo ""
 
   echo "⏳ Waiting for Ollama to start..."
   local max_attempts=30
@@ -243,7 +263,7 @@ start_cmd() {
   fi
   docker compose ps
   echo ""
-  fix_ownership
+  # Ownership is no longer auto-fixed here.
   check_health
 }
 
@@ -290,7 +310,7 @@ restart_cmd() {
   fi
   docker compose ps
   echo ""
-  fix_ownership
+  # Ownership is no longer auto-fixed here.
   check_health
 }
 
@@ -321,6 +341,9 @@ case "$command" in
     ;;
   export)
     ./tools/export_code.sh "$@"
+    ;;
+  change-owner)
+    change_owner_cmd "$@"
     ;;
   -h|--help|"")
     usage
