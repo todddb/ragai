@@ -9,29 +9,57 @@ usage() {
 Usage: ragaictl <command> [options]
 
 Commands:
-  setup-new                             Complete first-time setup (creates dirs, installs deps, pulls models)
-  start                                 Start ollama/qdrant/api/frontend and show status
-  stop                                  Stop all services (docker compose down)
+  setup-new                             First-time setup (dirs, deps, build, start, pull models)
+  start [service...]                    Start services (default: ollama qdrant api frontend), then health check
+  stop [service...]                     Stop services (default: all) WITHOUT removing containers
+  down                                  Remove containers/networks created by compose (docker compose down)
   status                                Show service status
-  logs [service]                        Follow logs (optionally scoped to a service)
-  build                                 Build images (docker compose build)
-  rebuild [--no-cache]                  Clean rebuild images (optional no-cache)
-  restart [service]                     Restart services
-  dump_project [--scope <scope>] [--max-lines <n>]
-                                        Dump project code/data snapshot
+  logs [service] [--tail N]             Follow logs (optionally scoped to a service)
+  build [--no-cache] [service...]       Build images (default: all services)
+  restart [service...]                  Restart services (default: all), then health check
+  export_code [scope] [--max-lines N]   Export project snapshot (replaces dump_project)
 
-Dump scopes:
+Export scopes:
   all-code   (default, no data, no secrets)
   all        (includes data, excludes secrets)
   api
-  crawler
   ingestor
   frontend
 
 Notes:
-  - Data is only included when an explicit scope requests it (e.g., all).
-  - Secrets are always excluded.
+  - Secrets are always excluded from exports.
+  - 'stop' keeps containers; 'down' removes them.
 EOF
+}
+
+# Parse simple optional flag for logs
+logs_cmd() {
+  local service=""
+  local tail_arg=""
+
+  if [[ $# -gt 0 && "${1:-}" != --* ]]; then
+    service="$1"
+    shift
+  fi
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --tail)
+        tail_arg="--tail=${2:-200}"
+        shift 2
+        ;;
+      *)
+        echo "Unknown option for logs: $1"
+        exit 1
+        ;;
+    esac
+  done
+
+  if [[ -n "$service" ]]; then
+    docker compose logs -f $tail_arg "$service"
+  else
+    docker compose logs -f $tail_arg
+  fi
 }
 
 check_health() {
@@ -40,7 +68,6 @@ check_health() {
   local api_url="http://localhost:8000/api/health"
 
   echo "⏳ Waiting for API to become available..."
-
   while [ $attempt -le $max_attempts ]; do
     if curl -s -f -m 2 "$api_url" > /dev/null 2>&1; then
       echo "✅ API is responding"
@@ -58,44 +85,50 @@ check_health() {
     return 1
   fi
 
-  # Get health status from API
   local health_json
   health_json=$(curl -s -f -m 2 "$api_url" 2>/dev/null || echo '{}')
 
-  local api_status=$(echo "$health_json" | grep -o '"api":"[^"]*"' | cut -d'"' -f4)
-  local ollama_status=$(echo "$health_json" | grep -o '"ollama":"[^"]*"' | cut -d'"' -f4)
-  local qdrant_status=$(echo "$health_json" | grep -o '"qdrant":"[^"]*"' | cut -d'"' -f4)
+  local api_status
+  local ollama_status
+  local qdrant_status
+  api_status=$(echo "$health_json" | grep -o '"api":"[^"]*"' | cut -d'"' -f4 || true)
+  ollama_status=$(echo "$health_json" | grep -o '"ollama":"[^"]*"' | cut -d'"' -f4 || true)
+  qdrant_status=$(echo "$health_json" | grep -o '"qdrant":"[^"]*"' | cut -d'"' -f4 || true)
 
   echo ""
   echo "=== Health Check Summary ==="
-
-  if [ "$api_status" = "ok" ]; then
-    echo "✅ API OK"
-  else
-    echo "❌ API FAILED"
-  fi
-
-  if [ "$ollama_status" = "ok" ]; then
-    echo "✅ Ollama OK"
-  else
-    echo "❌ Ollama FAILED (status: ${ollama_status:-unknown})"
-  fi
-
-  if [ "$qdrant_status" = "ok" ]; then
-    echo "✅ Qdrant OK"
-  else
-    echo "❌ Qdrant FAILED (status: ${qdrant_status:-unknown})"
-  fi
-
+  [[ "$api_status" == "ok" ]] && echo "✅ API OK" || echo "❌ API FAILED"
+  [[ "$ollama_status" == "ok" ]] && echo "✅ Ollama OK" || echo "❌ Ollama FAILED (status: ${ollama_status:-unknown})"
+  [[ "$qdrant_status" == "ok" ]] && echo "✅ Qdrant OK" || echo "❌ Qdrant FAILED (status: ${qdrant_status:-unknown})"
   echo "==========================="
   echo ""
 
-  # Return success if at least API is OK
-  if [ "$api_status" = "ok" ]; then
+  [[ "$api_status" == "ok" ]]
+}
+
+fix_ownership() {
+  # Only chown bind-mounted directories that commonly get root-owned files.
+  # Avoid blanket chown of the whole repo.
+  local targets=(data config qdrant_storage ollama_models)
+
+  # Only run if those directories exist
+  local existing=()
+  for t in "${targets[@]}"; do
+    [[ -e "$t" ]] && existing+=("$t")
+  done
+
+  if [[ ${#existing[@]} -eq 0 ]]; then
     return 0
-  else
-    return 1
   fi
+
+  echo "🧹 Fixing ownership on: ${existing[*]}"
+  if command -v sudo >/dev/null 2>&1; then
+    sudo chown -R "$USER:$USER" "${existing[@]}" || true
+  else
+    echo "⚠️  sudo not available; skipping chown. You may need:"
+    echo "    sudo chown -R $USER:$USER ${existing[*]}"
+  fi
+  echo ""
 }
 
 setup_new() {
@@ -104,10 +137,11 @@ setup_new() {
   echo "==================================="
   echo ""
 
-  # Create directory structure
   echo "📁 Creating directory structure..."
   mkdir -p secrets/playwright
   mkdir -p data/{artifacts,conversations,ingest,logs/jobs,candidates,sqlite}
+  mkdir -p qdrant_storage
+  mkdir -p ollama_models
   echo "✅ Directories created"
   echo ""
 
@@ -121,18 +155,15 @@ setup_new() {
     fi
     echo ""
   else
-    echo "ℹ️  Non-Debian system detected. Please install these packages manually:"
-    echo "   - curl, git, python3, python3-pip, python3-venv"
+    echo "ℹ️  Non-Debian system detected. Please install manually: curl git python3 python3-pip python3-venv"
     echo ""
   fi
 
-  # Create empty admin tokens file if it doesn't exist
   if [ ! -f secrets/admin-tokens ]; then
     echo "🔑 Creating admin tokens file..."
     touch secrets/admin-tokens
     chmod 600 secrets/admin-tokens
 
-    # Generate a sample token
     if command -v openssl &> /dev/null; then
       SAMPLE_TOKEN=$(openssl rand -hex 32)
       echo "$SAMPLE_TOKEN" > secrets/admin-tokens
@@ -141,8 +172,6 @@ setup_new() {
       echo "🔐 Your admin token is:"
       echo "   $SAMPLE_TOKEN"
       echo ""
-      echo "   Save this token! You'll need it to access the admin interface."
-      echo "   Location: secrets/admin-tokens"
     else
       echo "⚠️  openssl not found. Please manually add an admin token to secrets/admin-tokens"
     fi
@@ -152,22 +181,18 @@ setup_new() {
     echo ""
   fi
 
-  # Build Docker images
   echo "🔨 Building Docker images..."
-  if docker compose build; then
-    echo "✅ Docker images built successfully"
-  else
-    echo "❌ Failed to build Docker images"
-    exit 1
-  fi
+  docker compose build
+  echo "✅ Docker images built successfully"
   echo ""
 
-  # Start services
   echo "🚀 Starting services..."
   docker compose up -d ollama qdrant api frontend
+  docker compose ps
   echo ""
 
-  # Wait for Ollama to be ready
+  fix_ownership
+
   echo "⏳ Waiting for Ollama to start..."
   local max_attempts=30
   local attempt=1
@@ -179,65 +204,93 @@ setup_new() {
     sleep 2
     attempt=$((attempt + 1))
   done
-
   if [ $attempt -gt $max_attempts ]; then
-    echo "❌ Ollama failed to start after ${max_attempts} attempts"
+    echo "❌ Ollama failed to start"
     echo "   Check logs: ./tools/ragaictl logs ollama"
     exit 1
   fi
   echo ""
 
-  # Pull Ollama models
-  echo "📥 Pulling Ollama models (this may take several minutes)..."
-  echo ""
-
+  echo "📥 Pulling Ollama models..."
   echo "   Pulling embedding model: nomic-embed-text:latest"
-  if docker compose exec -T ollama ollama pull nomic-embed-text:latest; then
-    echo "   ✅ nomic-embed-text:latest pulled successfully"
-  else
-    echo "   ❌ Failed to pull nomic-embed-text:latest"
-  fi
-  echo ""
-
+  docker compose exec -T ollama ollama pull nomic-embed-text:latest || true
   echo "   Pulling LLM model: llama3.2:latest"
-  if docker compose exec -T ollama ollama pull llama3.2:latest; then
-    echo "   ✅ llama3.2:latest pulled successfully"
-  else
-    echo "   ❌ Failed to pull llama3.2:latest"
-  fi
+  docker compose exec -T ollama ollama pull llama3.2:latest || true
   echo ""
 
-  # Verify models
   echo "📋 Installed models:"
-  docker compose exec -T ollama ollama list
+  docker compose exec -T ollama ollama list || true
   echo ""
 
-  # Health check
   echo "🏥 Running health checks..."
   check_health || {
-    echo ""
     echo "⚠️  Setup completed but health checks failed."
     echo "   Check logs: ./tools/ragaictl logs"
     exit 1
   }
 
+  echo "✅ Setup complete!"
+  echo "Frontend: http://localhost:5000"
+  echo "Admin:    http://localhost:5000/settings.html"
+}
+
+start_cmd() {
+  if [[ $# -gt 0 ]]; then
+    docker compose up -d "$@"
+  else
+    docker compose up -d ollama qdrant api frontend
+  fi
+  docker compose ps
   echo ""
-  echo "==================================="
-  echo "  ✅ Setup Complete!"
-  echo "==================================="
+  fix_ownership
+  check_health
+}
+
+stop_cmd() {
+  if [[ $# -gt 0 ]]; then
+    docker compose stop "$@"
+  else
+    docker compose stop
+  fi
+  docker compose ps
+}
+
+down_cmd() {
+  docker compose down --remove-orphans
+}
+
+build_cmd() {
+  local no_cache="false"
+  if [[ "${1:-}" == "--no-cache" ]]; then
+    no_cache="true"
+    shift
+  fi
+
+  if [[ "$no_cache" == "true" ]]; then
+    if [[ $# -gt 0 ]]; then
+      docker compose build --no-cache "$@"
+    else
+      docker compose build --no-cache
+    fi
+  else
+    if [[ $# -gt 0 ]]; then
+      docker compose build "$@"
+    else
+      docker compose build
+    fi
+  fi
+}
+
+restart_cmd() {
+  if [[ $# -gt 0 ]]; then
+    docker compose restart "$@"
+  else
+    docker compose restart
+  fi
+  docker compose ps
   echo ""
-  echo "Next steps:"
-  echo ""
-  echo "1. Edit config/allow_block.yml to add your seed URLs and allowed domains"
-  echo "2. Access the frontend: http://localhost:5000"
-  echo "3. Access the admin console: http://localhost:5000/settings.html (use the admin token shown above)"
-  echo "4. Start your first crawl from the admin console"
-  echo ""
-  echo "For more information, see:"
-  echo "  - docs/INSTALL.md"
-  echo "  - docs/USER_GUIDE.md"
-  echo "  - docs/ADMIN_GUIDE.md"
-  echo ""
+  fix_ownership
+  check_health
 }
 
 case "$command" in
@@ -245,37 +298,28 @@ case "$command" in
     setup_new
     ;;
   start)
-    docker compose up -d ollama qdrant api frontend
-    docker compose ps
-    echo ""
-    check_health || exit 1
+    start_cmd "$@"
     ;;
   stop)
-    docker compose down
+    stop_cmd "$@"
+    ;;
+  down)
+    down_cmd
     ;;
   status)
     docker compose ps
     ;;
   logs)
-    docker compose logs -f "$@"
+    logs_cmd "$@"
     ;;
   build)
-    docker compose build
-    ;;
-  rebuild)
-    if [[ "${1:-}" == "--no-cache" ]]; then
-      docker compose down --remove-orphans
-      docker compose build --no-cache
-      docker image prune -f
-    else
-      docker compose build
-    fi
+    build_cmd "$@"
     ;;
   restart)
-    docker compose restart "$@"
+    restart_cmd "$@"
     ;;
-  dump_project)
-    ./tools/dump_project.sh "$@"
+  export_code)
+    ./tools/export_code.sh "$@"
     ;;
   -h|--help|"")
     usage
@@ -285,3 +329,4 @@ case "$command" in
     exit 1
     ;;
 esac
+

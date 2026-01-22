@@ -2,28 +2,41 @@
 set -euo pipefail
 
 scope="all-code"
-scope_set="false"
 max_lines="2000"
+
+# Args:
+#   export_code [scope] [--max-lines N]
+# Scopes are positional; flags use --.
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --scope)
-      scope="${2:-}"
-      scope_set="true"
-      shift 2
-      ;;
     --max-lines)
       max_lines="${2:-}"
       shift 2
       ;;
+    -h|--help)
+      cat <<'EOF'
+Usage: export_code [scope] [--max-lines N]
+
+Scopes:
+  all-code   (default, no data, no secrets)
+  all        (includes data, excludes secrets)
+  api
+  ingestor
+  frontend
+
+Options:
+  --max-lines N   Max lines per file (default: 2000)
+EOF
+      exit 0
+      ;;
+    -*)
+      echo "Unknown option: $1"
+      exit 1
+      ;;
     *)
-      if [[ "$scope_set" == "false" ]]; then
-        scope="$1"
-        scope_set="true"
-      else
-        echo "Unknown argument: $1"
-        exit 1
-      fi
+      # positional scope
+      scope="$1"
       shift
       ;;
   esac
@@ -42,9 +55,6 @@ case "$scope" in
   api)
     roots=(services/api)
     ;;
-  crawler)
-    roots=(services/crawler)
-    ;;
   ingestor)
     roots=(services/ingestor)
     ;;
@@ -55,12 +65,13 @@ case "$scope" in
 esac
 
 timestamp=$(date +"%Y%m%d_%H%M%S")
-output_dir="dumps"
+output_dir="exports"
 mkdir -p "$output_dir"
-output="${output_dir}/project_dump_${scope}_${timestamp}.txt"
+output="${output_dir}/project_export_${scope}_${timestamp}.txt"
 
 exclude_paths=(.git __pycache__ secrets node_modules venv)
 include_patterns=("*.py" "*.yml" "*.yaml" "*.md" "Dockerfile" "*.txt" "*.json" "*.html" "*.css" "*.js")
+
 exclude_data=true
 if [[ "$scope" == "all" ]]; then
   exclude_data=false
@@ -78,6 +89,7 @@ fi
     if [[ ! -e "$root" ]]; then
       continue
     fi
+
     find_excludes=(
       ! -path "*/.git/*"
       ! -path "*/__pycache__/*"
@@ -102,4 +114,4 @@ fi
   done
 } > "$output"
 
-echo "Dump written to $output"
+echo "Export written to $output"
