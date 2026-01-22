@@ -488,14 +488,14 @@ async def clear_vectors() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Error connecting to Qdrant: {e}")
 
     deleted_items = []
-    points_count = 0
+    count_before = 0
 
     vector_size = None
     if any(col.name == collection for col in collections):
         try:
             info = client.get_collection(collection)
             vector_size = info.config.params.vectors.size
-            points_count = info.points_count
+            count_before = info.points_count
         except AttributeError:
             # Handle case where config structure doesn't match expected schema
             print(f"Warning: Could not get vector size for collection '{collection}' due to schema mismatch")
@@ -506,7 +506,7 @@ async def clear_vectors() -> Dict[str, Any]:
             else:
                 raise HTTPException(status_code=500, detail=f"Error getting collection info: {e}")
         client.delete_collection(collection_name=collection)
-        deleted_items.append(f"{points_count} vectors from collection '{collection}'")
+        deleted_items.append(f"{count_before} vectors from collection '{collection}'")
     if vector_size is None:
         if not embedding_model or not ollama_host:
             raise HTTPException(status_code=400, detail="Missing embedding configuration")
@@ -517,9 +517,24 @@ async def clear_vectors() -> Dict[str, Any]:
     )
     client.create_payload_index(collection_name=collection, field_name="doc_id", field_schema="keyword")
 
+    # Get count after recreation (should be 0)
+    count_after = 0
+    try:
+        info = client.get_collection(collection)
+        count_after = info.points_count
+    except Exception:
+        pass  # If we can't get the count, assume 0
+
     # Also delete ingest metadata
     if DB_PATH.exists():
         DB_PATH.unlink()
         deleted_items.append("ingest metadata.db")
 
-    return {"status": "ok", "deleted": deleted_items}
+    return {
+        "status": "ok",
+        "deleted": deleted_items,
+        "collection": collection,
+        "count_before": count_before,
+        "count_after": count_after,
+        "removed": count_before - count_after,
+    }

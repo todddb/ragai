@@ -1,6 +1,7 @@
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, Optional
 from urllib.parse import urlparse
@@ -17,7 +18,18 @@ AUTH_IDP_DOMAINS = {
     "auth.brightspot.byu.edu",
 }
 AUTH_TITLE_MARKERS = ("central authentication service", "cas")
-AUTH_CONTENT_MARKERS = ("sign in", "log in", "login")
+# CAS-specific markers that indicate a login page (more specific than generic "login" text)
+CAS_LOGIN_MARKERS = (
+    "central authentication service",
+    "/cas/login",
+    'action="/cas/login"',
+    'name="username"',
+    'name="password"',
+    'id="username"',
+    'id="password"',
+    "duo-frame",
+    "sso-login",
+)
 
 
 @dataclass
@@ -28,6 +40,7 @@ class AuthCheckResult:
     title: str
     status: Optional[int]
     error_reason: str
+    checked_at: Optional[str] = None  # ISO 8601 timestamp
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -37,6 +50,7 @@ class AuthCheckResult:
             "title": self.title,
             "status": self.status,
             "error_reason": self.error_reason,
+            "checked_at": self.checked_at,
         }
 
 
@@ -88,15 +102,36 @@ def _find_seed_for_domain(allow_block: Dict, domain: str) -> Optional[str]:
 
 
 def detect_auth_failure(final_url: str, title: str, content: str) -> Optional[str]:
-    host = (urlparse(final_url).hostname or "").lower()
+    """
+    Detect if the page indicates an authentication failure.
+    Uses high-confidence signals to avoid false positives.
+    """
+    parsed = urlparse(final_url)
+    host = (parsed.hostname or "").lower()
+    path = (parsed.path or "").lower()
+
+    # High confidence: Redirected to known IdP domain
     if any(idp_domain in host for idp_domain in AUTH_IDP_DOMAINS):
-        return f"redirected to {host}"
+        return f"redirected_to_idp:{host}"
+
+    # High confidence: Title indicates CAS login
     normalized_title = (title or "").lower()
     if any(marker in normalized_title for marker in AUTH_TITLE_MARKERS):
-        return "page title indicates CAS"
+        return "title_indicates_login"
+
+    # High confidence: CAS login path
+    if "/cas/login" in path:
+        return "cas_login_path_detected"
+
+    # Medium-high confidence: CAS-specific markers in content
     normalized_content = (content or "").lower()
-    if any(marker in normalized_content for marker in AUTH_CONTENT_MARKERS):
-        return "login marker detected"
+    cas_marker_count = sum(1 for marker in CAS_LOGIN_MARKERS if marker.lower() in normalized_content)
+
+    # Require multiple CAS markers to avoid false positives from footer text
+    if cas_marker_count >= 2:
+        return "cas_login_form_detected"
+
+    # No auth failure detected
     return None
 
 
@@ -110,7 +145,11 @@ def get_cached_auth_status() -> Dict[str, Dict[str, object]]:
     return dict(_AUTH_STATUS_CACHE.get("results", {}))
 
 
-def run_auth_checks(profile_names: Iterable[str], force: bool = False) -> Dict[str, Dict[str, object]]:
+async def run_auth_checks(profile_names: Iterable[str], force: bool = False) -> Dict[str, Dict[str, object]]:
+    """
+    Run auth validation checks for specified profiles.
+    Uses async Playwright API to avoid blocking the event loop.
+    """
     crawler_config = load_crawler_config()
     allow_block = load_allow_block_config()
     playwright_config = crawler_config.get("playwright", {})
@@ -124,7 +163,7 @@ def run_auth_checks(profile_names: Iterable[str], force: bool = False) -> Dict[s
                 results[name] = cached
                 continue
         profile = profiles.get(name) or {}
-        result = validate_auth_profile(name, profile, crawler_config, allow_block)
+        result = await validate_auth_profile(name, profile, crawler_config, allow_block)
         results[name] = result.to_dict()
 
     _AUTH_STATUS_CACHE["timestamp"] = time.time()
@@ -132,16 +171,22 @@ def run_auth_checks(profile_names: Iterable[str], force: bool = False) -> Dict[s
     return results
 
 
-def validate_auth_profile(
+async def validate_auth_profile(
     profile_name: str,
     profile: Dict,
     crawler_config: Dict,
     allow_block: Dict,
 ) -> AuthCheckResult:
+    """
+    Validate an auth profile using async Playwright API.
+    Tests if the stored auth state is still valid.
+    """
     playwright_config = crawler_config.get("playwright", {})
     headless = playwright_config.get("headless", True)
     timeout_ms = playwright_config.get("navigation_timeout_ms", 60000)
     logger = logging.getLogger(__name__)
+
+    checked_at = datetime.utcnow().isoformat() + "Z"
 
     storage_state_path = profile.get("storage_state_path")
     test_url = resolve_test_url(profile, allow_block, profile_name)
@@ -153,6 +198,7 @@ def validate_auth_profile(
             title="",
             status=None,
             error_reason="storage_state_path is not configured",
+            checked_at=checked_at,
         )
     if not test_url:
         return AuthCheckResult(
@@ -162,6 +208,7 @@ def validate_auth_profile(
             title="",
             status=None,
             error_reason="test_url is not configured",
+            checked_at=checked_at,
         )
 
     storage_state = Path(storage_state_path)
@@ -173,25 +220,26 @@ def validate_auth_profile(
             title="",
             status=None,
             error_reason=f"storage state not found: {storage_state_path}",
+            checked_at=checked_at,
         )
 
     try:
-        from playwright.sync_api import sync_playwright
+        from playwright.async_api import async_playwright
 
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=headless)
-            context = browser.new_context(storage_state=str(storage_state))
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=headless)
+            context = await browser.new_context(storage_state=str(storage_state))
             try:
-                page = context.new_page()
+                page = await context.new_page()
                 logger.info("AUTH_CHECK profile=%s url=%s", profile_name, test_url)
-                response = page.goto(test_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                response = await page.goto(test_url, wait_until="domcontentloaded", timeout=timeout_ms)
                 final_url = page.url
-                title = page.title()
-                content = page.content()
+                title = await page.title()
+                content = await page.content()
                 status = response.status if response else None
             finally:
-                context.close()
-                browser.close()
+                await context.close()
+                await browser.close()
     except Exception as exc:
         return AuthCheckResult(
             profile_name=profile_name,
@@ -200,6 +248,7 @@ def validate_auth_profile(
             title="",
             status=None,
             error_reason=str(exc),
+            checked_at=checked_at,
         )
 
     failure_reason = detect_auth_failure(final_url, title, content)
@@ -211,6 +260,7 @@ def validate_auth_profile(
             title=title,
             status=status,
             error_reason=failure_reason,
+            checked_at=checked_at,
         )
 
     return AuthCheckResult(
@@ -220,6 +270,7 @@ def validate_auth_profile(
         title=title,
         status=status,
         error_reason="",
+        checked_at=checked_at,
     )
 
 

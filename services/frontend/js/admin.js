@@ -753,7 +753,7 @@ function getAuthStatus(profileName) {
 
 function getAuthStatusBadge(status) {
   if (!status) {
-    return { label: '⚠️ Unknown', className: 'warning' };
+    return { label: '⏳ Not checked yet', className: 'warning' };
   }
   if (status.ok) {
     return { label: '✅ Valid', className: 'success' };
@@ -877,6 +877,17 @@ function renderAuthProfilesList() {
     statusMessage.style.fontSize = '0.75rem';
     statusMessage.style.color = 'var(--text-secondary)';
     statusRow.appendChild(statusMessage);
+
+    // Show last checked timestamp if available
+    if (status && status.checked_at) {
+      const checkedAt = document.createElement('div');
+      checkedAt.style.fontSize = '0.75rem';
+      checkedAt.style.color = 'var(--text-secondary)';
+      const timestamp = new Date(status.checked_at);
+      const timeStr = timestamp.toLocaleString();
+      checkedAt.textContent = `Last checked: ${timeStr}`;
+      statusRow.appendChild(checkedAt);
+    }
 
     if (status && !status.ok) {
       const reason = document.createElement('div');
@@ -1804,14 +1815,22 @@ async function clearVectors() {
   }
 
   const statusTarget = 'clearVectorsStatus';
-  setStatus(statusTarget, 'Clearing vectors...');
+  setStatus(statusTarget, 'Reading current vector count...');
 
   try {
     const response = await fetch(`${API_BASE}/api/admin/clear_vectors`, { method: 'POST' });
     if (response.ok) {
       const result = await response.json();
-      const deletedItems = result.deleted || [];
-      setStatus(statusTarget, `Cleared: ${deletedItems.join(', ')}`, 'success');
+      const before = result.count_before || 0;
+      const after = result.count_after || 0;
+      const removed = result.removed || 0;
+      const collection = result.collection || 'unknown';
+
+      setStatus(
+        statusTarget,
+        `Cleared vectors from '${collection}': before=${before} after=${after} removed=${removed}`,
+        'success'
+      );
     } else {
       setStatus(statusTarget, 'Error clearing vectors', 'error');
     }

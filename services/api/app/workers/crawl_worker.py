@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -319,7 +320,8 @@ def run_crawl_job(log, job_id: str = None) -> None:
     required_profiles = collect_required_profiles(crawler_config, allow_block)
     if required_profiles:
         log(f"Validating {len(required_profiles)} auth profile(s) before crawl")
-        results = run_auth_checks(required_profiles.keys())
+        # Run async auth checks in this synchronous context
+        results = asyncio.run(run_auth_checks(required_profiles.keys()))
         invalid_profiles = [
             result for result in results.values() if not result.get("ok")
         ]
