@@ -39,8 +39,7 @@ Before your first crawl, update `config/allow_block.yml` with your `seed_urls` a
 
 ## Services
 
-- **API**: FastAPI orchestrator (chat, admin, config)
-- **Crawler**: HTML discovery + capture
+- **API**: FastAPI orchestrator (chat, admin, config, crawling)
 - **Ingestor**: Embedding + Qdrant upsert
 - **Frontend**: Static HTML/CSS/JS UI
 
@@ -57,8 +56,8 @@ Admin tokens must be placed in `secrets/admin_tokens` (one token per line).
 
 ## Playwright-authenticated crawling (policy.byu.edu)
 
-To crawl authenticated pages on `policy.byu.edu`, generate a Playwright storage state file and
-enable Playwright in `config/crawler.yml`.
+To crawl authenticated pages on `policy.byu.edu`, generate a Playwright storage state file using
+the interactive auth capture tool and configure auth profiles in `config/crawler.yml`.
 
 ### 1) Generate a storage state file
 
@@ -67,34 +66,42 @@ Install Playwright locally (or in your virtual environment), then run the helper
 ```bash
 pip install playwright==1.47.2
 python -m playwright install chromium
-python tools/playwright_capture_state.py \
-  --url https://policy.byu.edu \
-  --output secrets/playwright/policy-byu-storageState.json
+python tools/capture_auth_state.py
 ```
 
-The script opens a browser window. Log in, then press Enter in the terminal to save the storage
-state. The JSON file is ignored by git.
+The script will:
+- Guide you through creating or selecting an auth profile
+- Open a browser window for you to log in (including MFA)
+- Validate that authentication works by testing protected URLs
+- Save the storage state to the configured path
 
-### 2) Update crawler config
+The JSON file is ignored by git.
 
-Ensure `config/crawler.yml` includes:
+### 2) Verify crawler config
+
+The capture tool automatically updates `config/crawler.yml` with your auth profile. Verify it includes:
 
 ```yaml
 playwright:
   enabled: true
+  auth_profiles:
+    policy_cas:
+      storage_state_path: secrets/playwright/policy-byu-storageState.json
+      use_for_domains:
+        - policy.byu.edu
+      start_url: https://policy.byu.edu/
+      test_urls:
+        - https://policy.byu.edu/view/business-gifts-and-entertainment-policy
   headless: true
-  storage_state_path: /app/secrets/playwright/policy-byu-storageState.json
-  use_for_domains:
-    - policy.byu.edu
   navigation_timeout_ms: 60000
 ```
 
-### 3) Rebuild and run the crawler
+### 3) Restart the API service
 
-Playwright is installed in the crawler image, so rebuild it after changes:
+Playwright is integrated into the API service. Restart to apply changes:
 
 ```bash
-docker compose build crawler
+./tools/ragaictl restart api
 ```
 
 Run a crawl and confirm logs include `FETCH=playwright` for `policy.byu.edu` URLs.
@@ -153,20 +160,19 @@ show non-zero GPU utilization during the request.
 ./tools/ragaictl status
 ./tools/ragaictl logs api
 ./tools/ragaictl build
-./tools/ragaictl rebuild --no-cache
+./tools/ragaictl build --no-cache
 ./tools/ragaictl restart api
-./tools/ragaictl dump_project --scope all-code --max-lines 2000
+./tools/ragaictl export_code all-code --max-lines 2000
 ```
 
-Dump scopes:
+Export scopes:
 - `all-code` (default, no data, no secrets)
 - `all` (includes data, excludes secrets)
 - `api`
-- `crawler`
 - `ingestor`
 - `frontend`
 
-Project dumps are written to `dumps/` by default.
+Project exports are written to `dumps/` by default.
 
 ## Frontend Usage
 
