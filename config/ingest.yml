@@ -6,3 +6,11 @@ chunking:
 embedding:
   model: nomic-embed-text
   batch_size: 10
+
+ingest:
+  workers: 1
+  embed_concurrency: 4
+  upsert_batch_size: 64
+  chunk_batch_size: 16
+  max_inflight_chunks: 256
+  prefer_gpu: true

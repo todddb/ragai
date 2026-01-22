@@ -243,41 +243,94 @@
                   <div class="field-label">Last Ingest</div>
                   <div class="info-value" id="lastIngest">-</div>
                 </div>
+                <div>
+                  <div class="field-label">Worker Status</div>
+                  <div class="info-value" id="ingestWorkerState">Checking...</div>
+                </div>
+                <div>
+                  <div class="field-label">Queue Depth</div>
+                  <div class="info-value" id="ingestQueueDepth">-</div>
+                </div>
               </div>
               <div class="actions-row">
-                <button class="btn btn-primary" id="triggerIngest">Trigger Ingest</button>
-                <span id="triggerIngestStatus" class="status-text"></span>
+                <button class="btn btn-primary" id="startIngestJobBtn">Start Ingest Job (Redis Queue)</button>
+                <button class="btn" id="refreshIngestJobBtn">Refresh Status</button>
+                <span id="ingestJobStatus" class="status-text"></span>
               </div>
             </div>
             <div class="log-section">
               <div class="log-header">
-                <h3>Live Log</h3>
+                <h3>Ingest Log</h3>
               </div>
-              <div class="log-area" id="ingestLog"></div>
-              <!-- Ingest Progress UI -->
-              <div id="ingest-progress-wrapper" style="margin-top:16px; display:none;">
+              <div class="log-area" id="ingestQueueLog"></div>
+              <div id="ingestProgressContainer" style="display:none; margin-top:1rem;">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                   <div style="flex:1; margin-right:12px;">
                     <div style="font-weight:600; margin-bottom:6px;">Ingest Progress</div>
                     <div style="background:#eef2f6; border-radius:6px; height:14px; overflow:hidden;">
-                      <div id="ingest-progress-bar" style="height:100%; width:0%; background:#007bff; transition: width 400ms ease;"></div>
+                      <div id="ingestProgressBarFill" style="height:100%; width:0%; background:#007bff; transition: width 400ms ease;"></div>
                     </div>
                   </div>
                   <div style="min-width:260px;">
-                    <div style="font-size:13px;" id="ingest-summary">
-                      <div>Artifacts: <span id="ingest-artifacts">0/0</span></div>
-                      <div>Chunks inserted: <span id="ingest-chunks">0</span></div>
-                      <div>Skipped: <span id="ingest-skipped">0</span></div>
-                      <div style="color:darkred;">Errors: <span id="ingest-errors">0</span></div>
+                    <div style="font-size:13px;">
+                      <div>Artifacts: <span id="ingestJobProgress">0 / 0</span></div>
+                      <div>ETA: <span id="ingestEta">Calculating…</span></div>
+                      <div>Current: <span id="ingestCurrentArtifact">-</span></div>
+                      <div style="color:darkred;">Errors: <span id="ingestErrorCount">0</span></div>
                     </div>
                   </div>
+                </div>
+                <div id="ingestSummaryCard" class="panel-card" style="display:none; margin-top:12px;">
+                  <h4>Ingest Summary</h4>
+                  <div id="ingestSummaryContent"></div>
                 </div>
               </div>
               <div class="actions-row align-right">
                 <span id="ingestLogStatus" class="status-text"></span>
-                <button class="btn" id="exportIngestLog">Export Log</button>
-                <button class="btn" id="deleteIngestLog">Delete Log</button>
+                <button class="btn" id="clearIngestLogBtn">Clear</button>
               </div>
+            </div>
+            <div class="panel-card">
+              <details>
+                <summary style="cursor:pointer; font-weight:600;">Performance Tuning (GPU utilization)</summary>
+                <p class="settings-help" style="margin-top: 8px;">
+                  Increase concurrency and batching to better saturate the GPU. Changes apply to new ingest jobs.
+                </p>
+                <div class="card-grid" style="margin-top: 1rem;">
+                  <div class="field">
+                    <label class="field-label" for="ingestEmbedConcurrency">Embed concurrency</label>
+                    <input type="number" id="ingestEmbedConcurrency" min="1" step="1" />
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="ingestUpsertBatchSize">Qdrant upsert batch size</label>
+                    <input type="number" id="ingestUpsertBatchSize" min="1" step="1" />
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="ingestChunkBatchSize">Chunk batch size</label>
+                    <input type="number" id="ingestChunkBatchSize" min="1" step="1" />
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="ingestMaxInflightChunks">Max inflight chunks</label>
+                    <input type="number" id="ingestMaxInflightChunks" min="1" step="1" />
+                  </div>
+                </div>
+                <div class="actions-row" style="margin-top: 12px;">
+                  <button class="btn btn-primary" id="saveIngestPerformance">Save Performance Settings</button>
+                  <span id="ingestPerformanceStatus" class="status-text"></span>
+                </div>
+              </details>
+            </div>
+            <div class="panel-card">
+              <details>
+                <summary style="cursor:pointer; font-weight:600;">Advanced / Legacy</summary>
+                <p class="settings-help" style="margin-top: 8px;">
+                  Legacy ingest runs the non-queue flow and is not recommended. Use only for troubleshooting.
+                </p>
+                <div class="actions-row">
+                  <button class="btn" id="triggerIngestLegacy">Trigger Legacy Ingest</button>
+                  <span id="triggerIngestStatus" class="status-text"></span>
+                </div>
+              </details>
             </div>
           </div>
 
@@ -326,55 +379,39 @@
           <div id="data" class="tab-content" style="display:none;">
             <div class="panel-card" id="dataValidationPanel">
               <h4>Validate Crawl Artifacts</h4>
+              <p class="settings-help">
+                Validate stored crawl artifacts, flag suspicious entries, and optionally quarantine them. Quarantined artifacts move to <code>data/quarantine/</code> and can be restored manually.
+              </p>
               <div class="actions-row">
-                <button class="btn btn-primary" id="validateArtifactsBtn">Validate Artifacts</button>
-                <button class="btn" id="refreshValidationBtn">Refresh</button>
+                <button class="btn btn-primary" id="validateArtifactsBtn">Validate Crawl</button>
+                <button class="btn" id="refreshValidationBtn">Refresh Summary</button>
                 <button class="btn btn-danger" id="quarantineSelectedBtn">Quarantine Selected</button>
                 <span id="dataValidationStatus" class="status-text"></span>
               </div>
 
               <div id="validationSummary" class="info-grid" style="margin-top:12px;"></div>
+              <div class="table-actions" style="margin-top:12px; display:flex; justify-content:space-between; align-items:center;">
+                <label style="display:flex; align-items:center; gap:6px;">
+                  <input type="checkbox" id="selectAllValidation" />
+                  Select all
+                </label>
+                <span id="selectedValidationCount" class="status-text"></span>
+              </div>
               <div id="validationList" class="validation-list" style="margin-top:12px;"></div>
             </div>
 
-            <div class="panel-card" id="ingestJobPanel">
-              <h4>Ingest Jobs (Redis Queue)</h4>
+            <div class="panel-card" id="ingestValidationPanel">
+              <h4>Validate Ingest Output</h4>
               <p class="settings-help">
-                Start an ingest job to process crawled artifacts and generate vector embeddings.
-                Jobs are queued in Redis and processed by the ingestor worker.
+                Checks ingest metadata, Qdrant vectors, and job state for mismatches.
               </p>
               <div class="actions-row">
-                <button class="btn btn-primary" id="startIngestJobBtn">Start Ingest Job</button>
-                <button class="btn" id="refreshIngestJobBtn">Refresh Status</button>
-                <span id="ingestJobStatus" class="status-text"></span>
+                <button class="btn btn-primary" id="validateIngestBtn">Validate Ingest</button>
+                <button class="btn" id="refreshIngestValidationBtn">Refresh Summary</button>
+                <span id="ingestValidationStatus" class="status-text"></span>
               </div>
-
-              <div id="ingestProgressContainer" style="display:none; margin-top:1rem;">
-                <div class="info-grid">
-                  <div>
-                    <div class="field-label">Job ID</div>
-                    <div class="info-value" id="ingestJobId">-</div>
-                  </div>
-                  <div>
-                    <div class="field-label">Status</div>
-                    <div class="info-value" id="ingestJobStatusValue">-</div>
-                  </div>
-                  <div>
-                    <div class="field-label">Progress</div>
-                    <div class="info-value" id="ingestJobProgress">0 / 0</div>
-                  </div>
-                </div>
-                <div style="margin-top:1rem;">
-                  <progress id="ingestProgressBar" value="0" max="100" style="width:100%;height:24px;"></progress>
-                </div>
-                <div class="log-section" style="margin-top:1rem;">
-                  <div class="log-header">
-                    <h3>Ingest Log</h3>
-                    <button class="btn" id="clearIngestLogBtn">Clear</button>
-                  </div>
-                  <div class="log-area" id="ingestLog" style="max-height:300px;"></div>
-                </div>
-              </div>
+              <div id="ingestValidationSummary" class="info-grid" style="margin-top:12px;"></div>
+              <div id="ingestValidationFindings" class="validation-list" style="margin-top:12px;"></div>
             </div>
 
             <div class="panel-card">
@@ -456,6 +493,16 @@
                   </div>
                 </div>
               </div>
+              <div class="panel-card" style="margin-top: 1rem;">
+                <h3 style="margin-top: 0; font-size: 1rem;">Danger Zone: Nuke All Data</h3>
+                <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
+                  Deletes artifacts, logs, quarantine, Qdrant vectors, and ingest metadata. Requires typing DELETE.
+                </p>
+                <div class="actions-row">
+                  <button class="btn btn-danger" id="resetAllData">Nuke Data / Start Over</button>
+                  <span id="resetAllStatus" class="status-text"></span>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -507,87 +554,5 @@
   <script src="js/config.js?v=2"></script>
   <script src="js/admin.js?v=2"></script>
   <script src="js/settings.js?v=2"></script>
-  <script>
-    // Ingest progress parser and UI updater
-    (function(){
-      // Adjust selectors to match your page structure:
-      const liveLogEl = document.getElementById('ingestLog');
-      const wrapper = document.getElementById('ingest-progress-wrapper');
-      const bar = document.getElementById('ingest-progress-bar');
-      const artifactsEl = document.getElementById('ingest-artifacts');
-      const chunksEl = document.getElementById('ingest-chunks');
-      const skippedEl = document.getElementById('ingest-skipped');
-      const errorsEl = document.getElementById('ingest-errors');
-
-      if (!liveLogEl || !wrapper) return;
-
-      // parsing state
-      let lastParsedLen = 0;
-      let totalArtifacts = 0;
-      let processedArtifacts = 0;
-      let totalChunksInserted = 0;
-      let totalSkipped = 0;
-      let totalErrors = 0;
-
-      function parseNewLog() {
-        const text = liveLogEl.innerText || liveLogEl.textContent || '';
-        if (text.length === lastParsedLen) return;
-        const newText = text.slice(lastParsedLen);
-        lastParsedLen = text.length;
-
-        const lines = newText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-        for (const line of lines) {
-          // start line
-          let m;
-          if ((m = line.match(/^INGEST_PROGRESS START total_artifacts=(\d+)/))) {
-            totalArtifacts = parseInt(m[1],10);
-            processedArtifacts = 0;
-            totalChunksInserted = 0;
-            totalSkipped = 0;
-            totalErrors = 0;
-            wrapper.style.display = totalArtifacts ? 'block' : 'none';
-            // Reset UI
-            artifactsEl.textContent = `0/${totalArtifacts}`;
-            chunksEl.textContent = '0';
-            skippedEl.textContent = '0';
-            errorsEl.textContent = '0';
-            bar.style.width = '0%';
-          } else if ((m = line.match(/^INGEST_PROGRESS artifact(?:_skipped_unchanged)?\s+index=(\d+)\/(\d+).*?kept_chunks=(\d+).*?skipped_chunks=(\d+)/))) {
-            processedArtifacts = parseInt(m[1],10);
-            totalArtifacts = parseInt(m[2],10);
-            const kept = parseInt(m[3],10);
-            const skipped = parseInt(m[4],10);
-            // Update counts
-            totalSkipped += skipped;
-            // Update UI
-            artifactsEl.textContent = `${processedArtifacts}/${totalArtifacts}`;
-            skippedEl.textContent = totalSkipped;
-            // Update progress bar
-            const pct = totalArtifacts ? Math.round((processedArtifacts/totalArtifacts)*100) : 100;
-            bar.style.width = pct + '%';
-          } else if ((m = line.match(/^INGEST_BATCH .*inserted_chunks=(\d+)/))) {
-            totalChunksInserted += parseInt(m[1],10);
-            chunksEl.textContent = totalChunksInserted;
-          } else if ((m = line.match(/^INGEST_ERROR/))) {
-            totalErrors += 1;
-            errorsEl.textContent = totalErrors;
-          } else if ((m = line.match(/^INGEST_COMPLETE total_artifacts=(\d+) total_documents=.+ total_chunks=(\d+)/))) {
-            // final summary
-            const finalArtifacts = parseInt(m[1],10);
-            const finalChunks = parseInt(m[2],10);
-            artifactsEl.textContent = `${finalArtifacts}/${finalArtifacts}`;
-            chunksEl.textContent = finalChunks;
-            bar.style.width = '100%';
-          }
-        }
-      }
-
-      // Poll every 1.5s for new logs
-      setInterval(parseNewLog, 1500);
-
-      // kick initial parse
-      parseNewLog();
-    })();
-  </script>
 </body>
 </html>

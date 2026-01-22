@@ -4,6 +4,7 @@ from fastapi.responses import StreamingResponse
 from uuid import uuid4
 import time
 import json
+from datetime import datetime, timezone
 from app.utils.redis_queue import push_job, get_job, set_job_status, redis_client
 
 router = APIRouter(prefix="/api/ingest", tags=["ingest"])
@@ -68,7 +69,8 @@ async def job_events(request: Request, job_id: str):
     Server-Sent Events stream for live job progress and logs.
 
     Event types:
-    - progress: {"type": "progress", "done": N, "total": M, "status": "...", "ts": "..."}
+    - start: {"type": "start", "total_artifacts": N, "started_at": "..."}
+    - artifact_progress: {"type": "artifact_progress", "done_artifacts": N, "total_artifacts": M, "current_artifact": "..."}
     - log: {"type": "log", "level": "info|error", "message": "...", "ts": "..."}
     - complete: {"type": "complete", "msg": "...", "ts": "..."}
     - error: {"type": "error", "msg": "...", "ts": "..."}
@@ -108,6 +110,27 @@ async def job_events(request: Request, job_id: str):
             await pubsub.close()
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.get("/worker/status")
+async def get_worker_status():
+    heartbeat = await redis_client.get("ingest_worker:heartbeat")
+    info = await redis_client.hgetall("ingest_worker:info")
+    queue_depth = await redis_client.llen("jobs:queue")
+    age_seconds = None
+    if heartbeat:
+        try:
+            heartbeat_dt = datetime.fromisoformat(heartbeat.replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            age_seconds = (now - heartbeat_dt).total_seconds()
+        except Exception:
+            age_seconds = None
+    return {
+        "heartbeat": heartbeat,
+        "age_seconds": age_seconds,
+        "worker": info or {},
+        "queue_depth": queue_depth,
+    }
 
 
 @router.post("/{job_id}/cancel")
