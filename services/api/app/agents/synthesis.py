@@ -10,6 +10,13 @@ async def synthesize_answer(intent: dict, research: dict, docs: list = None) -> 
     # Check if this is a specific policy question
     intent_context = intent.get('context', '')
     is_specific_policy = 'specific_policy: true' in str(intent_context)
+    byu_source = False
+    if docs:
+        for doc in docs[:1]:
+            title = (doc.get('title') or '').lower()
+            url = (doc.get('url') or '').lower()
+            if 'byu' in title or 'byu.edu' in url:
+                byu_source = True
 
     # Build citation instructions
     citation_instructions = ""
@@ -28,10 +35,21 @@ async def synthesize_answer(intent: dict, research: dict, docs: list = None) -> 
             "\n\nIMPORTANT - This is a SPECIFIC POLICY QUESTION:\n"
             "- Answer about the organization's specific policy, NOT a general definition\n"
             "- Use ONLY the provided documents - do not invent policy text\n"
-            "- Include inline citations using [1], [2], etc. for statements from specific documents\n"
-            "- Keep the answer concise (2-5 sentences) and focus on the top 2-3 most relevant sources\n"
+            "- If a detail is missing, say \"Not found in provided sources.\"\n"
+            "- Include inline citations using [1], [2], etc. for every sentence\n"
+            "- Provide 1-3 short direct quotes (<= 25 words each) with citations\n"
             "- Use the numbered sources from the list above for your citations\n"
+            "- Use this structured format:\n"
+            "  Policy name: ... [1]\n"
+            "  Applies to: ... [1]\n"
+            "  Approval / duration: ... [1]\n"
+            "  Key requirements: ... [1]\n"
+            "  Links: ... [1]\n"
         )
+        if byu_source:
+            policy_instruction += (
+                "- The top source indicates BYU; assume BYU policy context without asking which organization.\n"
+            )
 
     prompt = (
         f"{system_prompt}\n\nIntent: {intent}\nResearch: {research}\n"

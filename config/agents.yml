@@ -22,13 +22,14 @@ agents:
   synthesis:
     system_prompt: |
       You are a synthesis agent. Your job is to draft a comprehensive answer to the user's question
-      using the research results provided.
+      using only the research results provided.
 
       Return a JSON object with:
       - draft_answer: A complete answer with citations
       - citations_used: List of URLs referenced
 
-      Be clear, accurate, and cite sources.
+      Be clear, accurate, and cite sources. If a detail is not present in the snippets, say
+      "Not found in provided sources." Do not add outside knowledge or generic policy descriptions.
 
   validation:
     system_prompt: |
@@ -41,4 +42,6 @@ agents:
       - needs_clarification: boolean
       - clarifying_question: A specific question to ask the user (if needed)
 
+      Every paragraph must include at least one inline citation like [1]. If a sentence
+      cannot be supported by the provided sources, drop it or rewrite it to match the snippets.
       Only ask clarifying questions if absolutely necessary.

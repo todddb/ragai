@@ -405,22 +405,6 @@ body.page-chat .chat-layout {
   color: var(--text-primary);
 }
 
-.sources-list-inline {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-md);
-}
-
-.source-item-inline {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-xs);
-  padding: var(--spacing-sm);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
-  background: var(--bg-white);
-}
-
 .source-index {
   display: inline-flex;
   align-items: center;
@@ -429,10 +413,11 @@ body.page-chat .chat-layout {
   height: 20px;
   padding: 0 6px;
   border-radius: var(--radius-sm);
-  background: var(--primary-blue);
-  color: var(--bg-white);
+  border: 1px solid var(--border-light);
+  background: var(--bg-white);
+  color: var(--text-secondary);
   font-size: 0.75rem;
-  font-weight: 600;
+  font-weight: 500;
   margin-right: var(--spacing-xs);
 }
 
@@ -445,19 +430,6 @@ body.page-chat .chat-layout {
 
 .source-link:hover {
   text-decoration: underline;
-}
-
-.source-snippet-inline {
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-  line-height: 1.4;
-  margin-left: 34px;
-}
-
-.source-meta-inline {
-  font-size: 0.75rem;
-  color: var(--text-tertiary);
-  margin-left: 34px;
 }
 
 .sources-more-btn {
@@ -508,6 +480,9 @@ body.page-chat .chat-layout {
 }
 
 .source-title {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
   font-weight: 600;
   font-size: 0.9rem;
 }
