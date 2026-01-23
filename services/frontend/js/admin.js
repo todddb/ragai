@@ -174,7 +174,16 @@ function renderSeedList() {
   `;
   table.appendChild(header);
 
-  crawlState.seeds.forEach((seedObj, index) => {
+  // Sort seeds alphabetically by URL
+  const sortedSeeds = [...crawlState.seeds].sort((a, b) => {
+    const urlA = (normalizeSeed(a).url || '').toLowerCase();
+    const urlB = (normalizeSeed(b).url || '').toLowerCase();
+    return urlA.localeCompare(urlB);
+  });
+
+  sortedSeeds.forEach((seedObj, displayIndex) => {
+    // Find the original index for edit state tracking
+    const index = crawlState.seeds.findIndex(s => normalizeSeed(s).url === normalizeSeed(seedObj).url);
     const seed = normalizeSeed(seedObj);
     const row = document.createElement('div');
     row.className = 'seed-row';
@@ -259,7 +268,15 @@ function renderBlockedList() {
   const list = document.getElementById('blockedList');
   if (!list) return;
   list.innerHTML = '';
-  crawlState.blocked.forEach((domain, index) => {
+
+  // Sort blocked domains alphabetically
+  const sortedBlocked = [...crawlState.blocked].sort((a, b) => {
+    return a.toLowerCase().localeCompare(b.toLowerCase());
+  });
+
+  sortedBlocked.forEach((domain, displayIndex) => {
+    // Find the original index for edit state tracking
+    const index = crawlState.blocked.indexOf(domain);
     const row = document.createElement('div');
     row.className = 'list-row';
     if (editState.blocked === index) {
@@ -445,7 +462,15 @@ function renderAllowTable() {
     <div></div>
   `;
   table.appendChild(header);
-  crawlState.allowRules.forEach((rule, index) => {
+
+  // Sort allow rules alphabetically by pattern
+  const sortedAllowRules = [...crawlState.allowRules].sort((a, b) => {
+    return (a.pattern || '').toLowerCase().localeCompare((b.pattern || '').toLowerCase());
+  });
+
+  sortedAllowRules.forEach((rule, displayIndex) => {
+    // Find the original index for edit state tracking
+    const index = crawlState.allowRules.findIndex(r => r.id === rule.id || r.pattern === rule.pattern);
     const row = document.createElement('div');
     row.className = 'allowed-row';
     const urlCell = document.createElement('div');
@@ -923,8 +948,13 @@ function renderAuthProfilesList() {
     return;
   }
 
+  // Sort profile names alphabetically
+  const sortedProfileNames = [...profileNames].sort((a, b) => {
+    return a.toLowerCase().localeCompare(b.toLowerCase());
+  });
+
   list.innerHTML = '';
-  profileNames.forEach((name) => {
+  sortedProfileNames.forEach((name) => {
     const profile = profiles[name];
     const row = document.createElement('div');
     row.className = 'list-row';
@@ -1261,6 +1291,12 @@ function showTab(name) {
   document.querySelectorAll('.tab-button').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.tab === name);
   });
+
+  // Load data when switching to Data tab
+  if (name === 'data') {
+    loadPipelineHealth();
+    loadDataValidation();
+  }
 }
 
 function setStatus(targetId, message, type = 'success') {
@@ -1504,16 +1540,33 @@ async function loadRecommendations() {
 }
 
 async function saveCrawlConfig() {
+  // Sort seeds alphabetically by URL
+  const sortedSeeds = [...crawlState.seeds].sort((a, b) => {
+    const urlA = (normalizeSeed(a).url || '').toLowerCase();
+    const urlB = (normalizeSeed(b).url || '').toLowerCase();
+    return urlA.localeCompare(urlB);
+  });
+
+  // Sort blocked domains alphabetically
+  const sortedBlocked = [...crawlState.blocked].sort((a, b) => {
+    return a.toLowerCase().localeCompare(b.toLowerCase());
+  });
+
+  // Sort allow rules alphabetically by pattern
+  const sortedAllowRules = [...crawlState.allowRules].sort((a, b) => {
+    return (a.pattern || '').toLowerCase().localeCompare((b.pattern || '').toLowerCase());
+  });
+
   const allowPayload = {
-    seed_urls: crawlState.seeds.map((seed) => {
+    seed_urls: sortedSeeds.map((seed) => {
       const normalized = normalizeSeed(seed);
       return {
         url: normalized.url,
         allow_http: normalized.allow_http
       };
     }),
-    blocked_domains: crawlState.blocked,
-    allow_rules: crawlState.allowRules.map((rule) => ({
+    blocked_domains: sortedBlocked,
+    allow_rules: sortedAllowRules.map((rule) => ({
       id: rule.id,
       pattern: rule.pattern,
       match: rule.match || 'prefix',
@@ -1521,7 +1574,7 @@ async function saveCrawlConfig() {
       allow_http: Boolean(rule.allow_http),
       auth_profile: rule.auth_profile || null
     })),
-    allowed_domains: extractAllowedDomains(crawlState.allowRules)
+    allowed_domains: extractAllowedDomains(sortedAllowRules)
   };
   const allowResponse = await fetch(`${API_BASE}/api/admin/config/allow_block`, {
     method: 'PUT',
@@ -2059,7 +2112,296 @@ async function resetAllData() {
   }
 }
 
+// Pipeline Health functions
+async function loadPipelineHealth() {
+  const statusTarget = 'pipelineHealthStatus';
+  setStatus(statusTarget, 'Loading pipeline health...');
+  try {
+    const resp = await fetch(`${API_BASE}/api/admin/data/health`);
+    if (!resp.ok) {
+      setStatus(statusTarget, 'Error loading health data', 'error');
+      return;
+    }
+    const health = await resp.json();
+    renderPipelineHealth(health);
+    setStatus(statusTarget, '');
+  } catch (err) {
+    setStatus(statusTarget, `Error: ${err.message}`, 'error');
+  }
+}
+
+function renderPipelineHealth(health = {}) {
+  const grid = document.getElementById('pipelineHealthGrid');
+  if (!grid) return;
+
+  const cards = [];
+
+  // Artifacts card
+  if (health.artifacts) {
+    const a = health.artifacts;
+    cards.push(`
+      <div class="panel-card" style="padding: 12px;">
+        <h5 style="margin: 0 0 8px 0; font-size: 0.9rem; color: var(--text-secondary);">Artifacts</h5>
+        <div style="font-size: 1.2rem; font-weight: 600;">${a.count || 0}</div>
+        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 4px;">
+          ${a.quarantined ? `Quarantined: ${a.quarantined}` : 'No quarantined'}
+        </div>
+        ${a.last_captured_at ? `<div style="font-size: 0.75rem; color: var(--text-secondary);">Last: ${new Date(a.last_captured_at).toLocaleString()}</div>` : ''}
+      </div>
+    `);
+  }
+
+  // Crawl card
+  if (health.crawl) {
+    const lastJob = health.crawl.last_job;
+    const statusColor = lastJob?.status === 'done' ? 'var(--success-color)' : lastJob?.status === 'error' ? 'var(--error-color)' : 'var(--text-secondary)';
+    cards.push(`
+      <div class="panel-card" style="padding: 12px;">
+        <h5 style="margin: 0 0 8px 0; font-size: 0.9rem; color: var(--text-secondary);">Crawl</h5>
+        ${lastJob ? `
+          <div style="font-size: 0.85rem; color: ${statusColor}; font-weight: 600;">${lastJob.status || 'unknown'}</div>
+          <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 4px;">Job: ${lastJob.id?.substring(0, 8) || 'N/A'}</div>
+          ${lastJob.finished_at ? `<div style="font-size: 0.75rem; color: var(--text-secondary);">Finished: ${new Date(lastJob.finished_at).toLocaleString()}</div>` : ''}
+        ` : '<div style="font-size: 0.85rem; color: var(--text-secondary);">No jobs yet</div>'}
+      </div>
+    `);
+  }
+
+  // Ingest card
+  if (health.ingest) {
+    const worker = health.ingest.worker || {};
+    const lastJob = health.ingest.last_job;
+    const workerStatus = worker.status || 'unknown';
+    const statusColor = workerStatus === 'idle' ? 'var(--success-color)' : workerStatus === 'busy' ? 'var(--warning-color)' : 'var(--text-secondary)';
+    cards.push(`
+      <div class="panel-card" style="padding: 12px;">
+        <h5 style="margin: 0 0 8px 0; font-size: 0.9rem; color: var(--text-secondary);">Ingest</h5>
+        <div style="font-size: 0.85rem; color: ${statusColor}; font-weight: 600;">Worker: ${workerStatus}</div>
+        ${lastJob ? `
+          <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 4px;">Last job: ${lastJob.status || 'unknown'}</div>
+          ${lastJob.finished_at ? `<div style="font-size: 0.75rem; color: var(--text-secondary);">Finished: ${new Date(lastJob.finished_at).toLocaleString()}</div>` : ''}
+        ` : '<div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 4px;">No jobs yet</div>'}
+      </div>
+    `);
+  }
+
+  // Qdrant card
+  if (health.qdrant) {
+    const collections = health.qdrant.collections || [];
+    const totalPoints = collections.reduce((sum, c) => sum + (c.points || 0), 0);
+    cards.push(`
+      <div class="panel-card" style="padding: 12px;">
+        <h5 style="margin: 0 0 8px 0; font-size: 0.9rem; color: var(--text-secondary);">Qdrant</h5>
+        <div style="font-size: 1.2rem; font-weight: 600;">${totalPoints.toLocaleString()}</div>
+        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 4px;">
+          ${collections.map(c => `${c.name}: ${c.points || 0}`).join(', ') || 'No collections'}
+        </div>
+      </div>
+    `);
+  }
+
+  // System card
+  if (health.system) {
+    const apiHealth = health.system.api_health || 'unknown';
+    const statusColor = apiHealth === 'ok' ? 'var(--success-color)' : 'var(--warning-color)';
+    cards.push(`
+      <div class="panel-card" style="padding: 12px;">
+        <h5 style="margin: 0 0 8px 0; font-size: 0.9rem; color: var(--text-secondary);">System</h5>
+        <div style="font-size: 0.85rem; color: ${statusColor}; font-weight: 600;">API: ${apiHealth}</div>
+      </div>
+    `);
+  }
+
+  grid.innerHTML = cards.join('');
+}
+
+// Check Data functions
+async function checkUrl() {
+  const input = document.getElementById('checkUrlInput');
+  const url = input?.value.trim();
+  if (!url) {
+    setStatus('checkUrlStatus', 'Please enter a URL', 'error');
+    return;
+  }
+
+  setStatus('checkUrlStatus', 'Checking URL...');
+  document.getElementById('checkUrlResults').style.display = 'none';
+
+  try {
+    const resp = await fetch(`${API_BASE}/api/admin/data/check_url`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+
+    if (!resp.ok) {
+      setStatus('checkUrlStatus', 'Error checking URL', 'error');
+      return;
+    }
+
+    const result = await resp.json();
+    renderCheckUrlResults(result);
+    setStatus('checkUrlStatus', 'Check complete', 'success');
+  } catch (err) {
+    setStatus('checkUrlStatus', `Error: ${err.message}`, 'error');
+  }
+}
+
+function renderCheckUrlResults(result) {
+  const resultsDiv = document.getElementById('checkUrlResults');
+  if (!resultsDiv) return;
+
+  resultsDiv.style.display = 'block';
+
+  // Artifact status
+  const artifactEl = document.getElementById('checkUrlArtifact');
+  if (result.artifact && result.artifact.found) {
+    const a = result.artifact.most_recent;
+    artifactEl.innerHTML = `
+      <div style="color: var(--success-color); font-weight: 600;">Found (${result.artifact.count} total)</div>
+      <div style="font-size: 0.85rem; margin-top: 4px;">
+        <strong>ID:</strong> ${escapeHtml(a.artifact_id)}<br>
+        <strong>Title:</strong> ${escapeHtml(a.title || 'N/A')}<br>
+        <strong>Status:</strong> ${a.status_code || 'N/A'}<br>
+        <strong>Captured:</strong> ${a.captured_at ? new Date(a.captured_at).toLocaleString() : 'N/A'}<br>
+        ${a.snippet ? `<div style="margin-top: 4px; padding: 4px; background: var(--bg-secondary); border-radius: 4px; font-family: monospace; font-size: 0.75rem; max-height: 100px; overflow-y: auto;">${escapeHtml(a.snippet)}</div>` : ''}
+      </div>
+    `;
+  } else {
+    artifactEl.innerHTML = '<div style="color: var(--text-secondary);">Not found</div>';
+  }
+
+  // Validation status
+  const validationEl = document.getElementById('checkUrlValidation');
+  if (result.validation && result.validation.found) {
+    const findings = result.validation.findings || [];
+    validationEl.innerHTML = `
+      <div style="color: var(--warning-color); font-weight: 600;">Found ${findings.length} finding(s)</div>
+      <div style="font-size: 0.85rem; margin-top: 4px;">
+        ${findings.map(f => `• ${escapeHtml(f.message || f.reason || 'Unknown finding')} (${f.severity || 'unknown'})`).join('<br>')}
+      </div>
+    `;
+  } else {
+    validationEl.innerHTML = '<div style="color: var(--text-secondary);">No findings</div>';
+  }
+
+  // Ingest status
+  const ingestEl = document.getElementById('checkUrlIngest');
+  if (result.ingest && result.ingest.found) {
+    const i = result.ingest;
+    ingestEl.innerHTML = `
+      <div style="color: var(--success-color); font-weight: 600;">Found</div>
+      <div style="font-size: 0.85rem; margin-top: 4px;">
+        <strong>Doc ID:</strong> ${escapeHtml(i.doc_id)}<br>
+        <strong>Chunks:</strong> ${i.chunk_count || 0}<br>
+        <strong>Ingested:</strong> ${i.ingested_at ? new Date(i.ingested_at).toLocaleString() : 'N/A'}
+      </div>
+    `;
+  } else {
+    ingestEl.innerHTML = '<div style="color: var(--text-secondary);">Not found</div>';
+  }
+
+  // Qdrant status
+  const qdrantEl = document.getElementById('checkUrlQdrant');
+  if (result.qdrant && result.qdrant.found) {
+    const q = result.qdrant;
+    const chunks = q.example_chunks || [];
+    qdrantEl.innerHTML = `
+      <div style="color: var(--success-color); font-weight: 600;">Found ${q.points_count || 0} points</div>
+      ${chunks.length ? `
+        <div style="font-size: 0.85rem; margin-top: 4px;">
+          <strong>Example chunks:</strong>
+          ${chunks.map(c => `<div style="margin-top: 4px; padding: 4px; background: var(--bg-secondary); border-radius: 4px; font-size: 0.75rem;">${escapeHtml(c.text || '')}</div>`).join('')}
+        </div>
+      ` : ''}
+    `;
+  } else {
+    qdrantEl.innerHTML = '<div style="color: var(--text-secondary);">Not found</div>';
+  }
+}
+
+async function searchData() {
+  const input = document.getElementById('searchDataInput');
+  const query = input?.value.trim();
+  if (!query) {
+    setStatus('searchDataStatus', 'Please enter a search term', 'error');
+    return;
+  }
+
+  setStatus('searchDataStatus', 'Searching...');
+  document.getElementById('searchDataResults').style.display = 'none';
+
+  try {
+    const resp = await fetch(`${API_BASE}/api/admin/data/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, limit: 10 })
+    });
+
+    if (!resp.ok) {
+      setStatus('searchDataStatus', 'Error searching', 'error');
+      return;
+    }
+
+    const result = await resp.json();
+    renderSearchResults(result);
+    setStatus('searchDataStatus', `Found ${result.artifacts?.length || 0} artifact matches, ${result.qdrant?.length || 0} Qdrant matches`, 'success');
+  } catch (err) {
+    setStatus('searchDataStatus', `Error: ${err.message}`, 'error');
+  }
+}
+
+function renderSearchResults(result) {
+  const resultsDiv = document.getElementById('searchDataResults');
+  if (!resultsDiv) return;
+
+  resultsDiv.style.display = 'block';
+
+  // Artifact matches
+  const artifactResults = document.getElementById('searchArtifactResults');
+  const artifacts = result.artifacts || [];
+  if (artifacts.length) {
+    artifactResults.innerHTML = artifacts.map(a => `
+      <div class="validation-row" style="padding: 8px;">
+        <div style="font-weight: 600; font-size: 0.85rem;">${escapeHtml(a.title || a.url || 'Unknown')}</div>
+        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px;">${escapeHtml(a.url || '')}</div>
+        <div style="font-size: 0.75rem; margin-top: 4px; padding: 4px; background: var(--bg-secondary); border-radius: 4px; font-family: monospace; max-height: 60px; overflow-y: auto;">
+          ${escapeHtml(a.snippet || '')}
+        </div>
+      </div>
+    `).join('');
+  } else {
+    artifactResults.innerHTML = '<div class="status-text">No artifact matches found.</div>';
+  }
+
+  // Qdrant matches
+  const qdrantResults = document.getElementById('searchQdrantResults');
+  const qdrant = result.qdrant || [];
+  if (qdrant.length && !qdrant.error) {
+    qdrantResults.innerHTML = qdrant.map(q => `
+      <div class="validation-row" style="padding: 8px;">
+        <div style="font-weight: 600; font-size: 0.85rem;">Score: ${(q.score || 0).toFixed(3)}</div>
+        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px;">${escapeHtml(q.url || 'Unknown URL')}</div>
+        <div style="font-size: 0.75rem; margin-top: 4px; padding: 4px; background: var(--bg-secondary); border-radius: 4px; max-height: 60px; overflow-y: auto;">
+          ${escapeHtml(q.text || '')}
+        </div>
+      </div>
+    `).join('');
+  } else if (qdrant.error) {
+    qdrantResults.innerHTML = `<div class="status-text" style="color: var(--error-color);">Error: ${escapeHtml(qdrant.error)}</div>`;
+  } else {
+    qdrantResults.innerHTML = '<div class="status-text">No Qdrant matches found.</div>';
+  }
+}
+
 // Validation & Quarantine functions
+let validationState = {
+  allItems: [],
+  lowerPriorityExpanded: false,
+  lowerPriorityPageSize: 10,
+  lowerPriorityFilter: 'all' // 'all', 'medium', 'low'
+};
+
 async function loadDataValidation() {
   const statusTarget = 'dataValidationStatus';
   setStatus(statusTarget, 'Loading validation summary...');
@@ -2131,6 +2473,20 @@ function renderValidationList(list = []) {
   const container = document.getElementById('validationList');
   if (!container) return;
   container.innerHTML = '';
+
+  // Store the list for state management
+  validationState.allItems = list;
+
+  // Load UI state from localStorage
+  const storedExpanded = localStorage.getItem('dataTab.lowerPriority.expanded');
+  const storedPageSize = localStorage.getItem('dataTab.lowerPriority.pageSize');
+  if (storedExpanded !== null) {
+    validationState.lowerPriorityExpanded = storedExpanded === 'true';
+  }
+  if (storedPageSize !== null) {
+    validationState.lowerPriorityPageSize = parseInt(storedPageSize, 10) || 10;
+  }
+
   if (!list.length) {
     container.innerHTML = '<div class="status-text">No flagged artifacts.</div>';
     updateSelectedValidationCount();
@@ -2139,42 +2495,182 @@ function renderValidationList(list = []) {
     return;
   }
 
-  list.forEach(item => {
-    const row = document.createElement('div');
-    row.className = 'validation-row';
-    row.innerHTML = `
-      <div style="display:flex; gap:12px; align-items:center;">
-        <input type="checkbox" class="validation-checkbox" data-artifact-id="${item.id}" />
-        <div style="flex:1">
-          <div style="font-weight:600;">${escapeHtml(item.title || item.url || item.id)}</div>
-          <div style="font-size:0.85rem;color:var(--text-secondary)">${escapeHtml(item.url || '')}</div>
-          <div style="font-size:0.85rem;color:var(--text-secondary)">${escapeHtml(item.reason || '')}</div>
-        </div>
-        <div style="min-width:140px; text-align:right;">
-          <div style="font-weight:600">${item.severity || '—'}</div>
-          <div class="actions-row" style="margin-top:6px;">
-            <button class="btn btn-small" data-action="quarantine" data-id="${item.id}">Quarantine</button>
-          </div>
-        </div>
-      </div>
-    `;
-    container.appendChild(row);
+  // Sort items alphabetically by URL
+  const sortedList = [...list].sort((a, b) => {
+    const urlA = (a.url || '').toLowerCase();
+    const urlB = (b.url || '').toLowerCase();
+    if (urlA < urlB) return -1;
+    if (urlA > urlB) return 1;
+    // Same URL, sort by severity
+    const severityOrder = { high: 3, medium: 2, low: 1 };
+    const sevA = severityOrder[a.severity] || 0;
+    const sevB = severityOrder[b.severity] || 0;
+    return sevB - sevA;
   });
 
-  // wire up single-item quarantine buttons
-  container.querySelectorAll('button[data-action="quarantine"]').forEach(btn => {
-    btn.addEventListener('click', async (ev) => {
-      const id = btn.dataset.id;
-      await quarantineArtifacts([id]);
+  // Split into high priority and lower priority
+  const highPriority = sortedList.filter(item => {
+    const severity = (item.severity || '').toLowerCase();
+    const reason = (item.reason || '').toLowerCase();
+
+    // High priority conditions
+    if (severity === 'high') return true;
+    if (reason.includes('login') || reason.includes('cas redirect')) return true;
+    if (reason.includes('malformed_url')) return true;
+    if (reason.includes('401') || reason.includes('403') || reason.includes('5')) return true;
+    if (reason.includes('parser failed') || reason.includes('no content') || reason.includes('empty text')) return true;
+
+    return false;
+  });
+
+  const lowerPriority = sortedList.filter(item => !highPriority.includes(item));
+
+  // Render high priority items
+  if (highPriority.length > 0) {
+    const highSection = document.createElement('div');
+    highSection.innerHTML = '<h5 style="margin: 16px 0 8px 0; color: var(--error-color);">High Priority</h5>';
+    container.appendChild(highSection);
+
+    highPriority.forEach(item => {
+      container.appendChild(createValidationRow(item));
     });
-  });
+  }
 
+  // Render lower priority items (collapsible)
+  if (lowerPriority.length > 0) {
+    const mediumCount = lowerPriority.filter(i => (i.severity || '').toLowerCase() === 'medium').length;
+    const lowCount = lowerPriority.filter(i => (i.severity || '').toLowerCase() === 'low').length;
+
+    const lowerSection = document.createElement('div');
+    lowerSection.style.marginTop = '24px';
+
+    const header = document.createElement('div');
+    header.style.cssText = 'display: flex; justify-content: space-between; align-items: center; cursor: pointer; padding: 8px 0;';
+    header.innerHTML = `
+      <h5 style="margin: 0; color: var(--text-secondary);">
+        Lower Priority Findings (Medium: ${mediumCount}, Low: ${lowCount})
+        <span style="font-size: 0.85rem; margin-left: 8px;">${validationState.lowerPriorityExpanded ? '▼' : '▶'}</span>
+      </h5>
+    `;
+    header.addEventListener('click', () => {
+      validationState.lowerPriorityExpanded = !validationState.lowerPriorityExpanded;
+      localStorage.setItem('dataTab.lowerPriority.expanded', validationState.lowerPriorityExpanded);
+      renderValidationList(validationState.allItems);
+    });
+    lowerSection.appendChild(header);
+
+    if (validationState.lowerPriorityExpanded) {
+      // Filter controls
+      const controls = document.createElement('div');
+      controls.style.cssText = 'display: flex; gap: 12px; align-items: center; margin: 12px 0;';
+      controls.innerHTML = `
+        <div style="display: flex; gap: 6px;">
+          <button class="btn btn-small ${validationState.lowerPriorityFilter === 'all' ? 'btn-primary' : ''}" data-filter="all">All</button>
+          <button class="btn btn-small ${validationState.lowerPriorityFilter === 'medium' ? 'btn-primary' : ''}" data-filter="medium">Medium</button>
+          <button class="btn btn-small ${validationState.lowerPriorityFilter === 'low' ? 'btn-primary' : ''}" data-filter="low">Low</button>
+        </div>
+        <div style="margin-left: auto; display: flex; gap: 6px; align-items: center;">
+          <span style="font-size: 0.85rem;">Page size:</span>
+          <button class="btn btn-small ${validationState.lowerPriorityPageSize === 10 ? 'btn-primary' : ''}" data-pagesize="10">10</button>
+          <button class="btn btn-small ${validationState.lowerPriorityPageSize === 25 ? 'btn-primary' : ''}" data-pagesize="25">25</button>
+          <button class="btn btn-small ${validationState.lowerPriorityPageSize === 50 ? 'btn-primary' : ''}" data-pagesize="50">50</button>
+          <button class="btn btn-small ${validationState.lowerPriorityPageSize === 100 ? 'btn-primary' : ''}" data-pagesize="100">100</button>
+        </div>
+      `;
+      lowerSection.appendChild(controls);
+
+      // Wire up filter buttons
+      controls.querySelectorAll('[data-filter]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          validationState.lowerPriorityFilter = btn.dataset.filter;
+          renderValidationList(validationState.allItems);
+        });
+      });
+
+      // Wire up page size buttons
+      controls.querySelectorAll('[data-pagesize]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          validationState.lowerPriorityPageSize = parseInt(btn.dataset.pagesize, 10);
+          localStorage.setItem('dataTab.lowerPriority.pageSize', validationState.lowerPriorityPageSize);
+          renderValidationList(validationState.allItems);
+        });
+      });
+
+      // Filter items
+      let filteredItems = lowerPriority;
+      if (validationState.lowerPriorityFilter === 'medium') {
+        filteredItems = lowerPriority.filter(i => (i.severity || '').toLowerCase() === 'medium');
+      } else if (validationState.lowerPriorityFilter === 'low') {
+        filteredItems = lowerPriority.filter(i => (i.severity || '').toLowerCase() === 'low');
+      }
+
+      // Paginate
+      const pageSize = validationState.lowerPriorityPageSize;
+      const displayedItems = filteredItems.slice(0, pageSize);
+
+      const itemsContainer = document.createElement('div');
+      displayedItems.forEach(item => {
+        itemsContainer.appendChild(createValidationRow(item));
+      });
+      lowerSection.appendChild(itemsContainer);
+
+      // Show "showing X of Y" message
+      if (filteredItems.length > displayedItems.length) {
+        const pagInfo = document.createElement('div');
+        pagInfo.style.cssText = 'margin-top: 12px; font-size: 0.85rem; color: var(--text-secondary); text-align: center;';
+        pagInfo.textContent = `Showing ${displayedItems.length} of ${filteredItems.length} items`;
+        lowerSection.appendChild(pagInfo);
+      }
+    }
+
+    container.appendChild(lowerSection);
+  }
+
+  // Wire up checkboxes
   container.querySelectorAll('.validation-checkbox').forEach(cb => {
     cb.addEventListener('change', updateSelectedValidationCount);
   });
   const selectAll = document.getElementById('selectAllValidation');
   if (selectAll) selectAll.checked = false;
   updateSelectedValidationCount();
+}
+
+function createValidationRow(item) {
+  const row = document.createElement('div');
+  row.className = 'validation-row';
+  row.innerHTML = `
+    <div style="display:flex; gap:12px; align-items:center;">
+      <input type="checkbox" class="validation-checkbox" data-artifact-id="${item.id}" />
+      <div style="flex:1">
+        <div style="font-weight:600;">${escapeHtml(item.url || item.title || item.id)}</div>
+        <div style="font-size:0.85rem;color:var(--text-secondary);margin-top:2px;">${escapeHtml(item.reason || '')}</div>
+      </div>
+      <div style="min-width:140px; text-align:right;">
+        <div style="font-weight:600; text-transform: uppercase; color: ${getSeverityColor(item.severity)};">${item.severity || '—'}</div>
+        <div class="actions-row" style="margin-top:6px;">
+          <button class="btn btn-small" data-action="quarantine" data-id="${item.id}">Quarantine</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Wire up quarantine button
+  const quarantineBtn = row.querySelector('button[data-action="quarantine"]');
+  if (quarantineBtn) {
+    quarantineBtn.addEventListener('click', async () => {
+      await quarantineArtifacts([item.id]);
+    });
+  }
+
+  return row;
+}
+
+function getSeverityColor(severity) {
+  const s = (severity || '').toLowerCase();
+  if (s === 'high') return 'var(--error-color)';
+  if (s === 'medium') return 'var(--warning-color)';
+  if (s === 'low') return 'var(--text-secondary)';
+  return 'var(--text-secondary)';
 }
 
 function updateSelectedValidationCount() {
@@ -2739,6 +3235,25 @@ document.getElementById('jobTable').addEventListener('click', async (event) => {
       setStatus('jobLogStatus', 'Deleted');
       loadJobs();
     }
+  }
+});
+
+// Wire up Pipeline Health event listeners
+document.getElementById('refreshHealthBtn')?.addEventListener('click', loadPipelineHealth);
+
+// Wire up Check Data event listeners
+document.getElementById('checkUrlBtn')?.addEventListener('click', checkUrl);
+document.getElementById('checkUrlInput')?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    checkUrl();
+  }
+});
+document.getElementById('searchDataBtn')?.addEventListener('click', searchData);
+document.getElementById('searchDataInput')?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    searchData();
   }
 });
 
