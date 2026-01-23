@@ -127,87 +127,135 @@ function normalizeHits(hits, limit = 8) {
 }
 
 function buildSourcesPanel(content) {
-  const hits = normalizeHits(getCitationHits(content));
-  if (!hits.length) {
+  // Try to use new aggregated sources first, fall back to old hits
+  let sources = [];
+  if (content.sources && Array.isArray(content.sources) && content.sources.length > 0) {
+    sources = content.sources;
+  } else {
+    const hits = normalizeHits(getCitationHits(content));
+    if (!hits.length) {
+      return null;
+    }
+    // Convert old hits format to new sources format
+    sources = hits.map(hit => ({
+      doc_id: hit.doc_id || '',
+      title: hit.title || hit.url || 'Unknown',
+      url: hit.url || '',
+      best_score: hit.score || 0,
+      match_count: 1,
+      snippet: hit.text || ''
+    }));
+  }
+
+  if (!sources.length) {
     return null;
   }
 
-  const details = document.createElement('details');
-  details.className = 'message-panel';
-  const summary = document.createElement('summary');
-  summary.className = 'message-panel-summary';
-  summary.textContent = 'Sources';
-  details.appendChild(summary);
+  const container = document.createElement('div');
+  container.className = 'sources-container';
+
+  const heading = document.createElement('div');
+  heading.className = 'sources-heading';
+  heading.textContent = 'Sources';
+  container.appendChild(heading);
 
   const list = document.createElement('div');
-  list.className = 'sources-list';
+  list.className = 'sources-list-inline';
 
-  hits.forEach((hit, index) => {
+  // Show top 3 sources inline
+  const topSources = sources.slice(0, 3);
+  topSources.forEach((source, index) => {
     const item = document.createElement('div');
-    item.className = 'source-item';
+    item.className = 'source-item-inline';
 
-    const header = document.createElement('div');
-    header.className = 'source-header';
+    const indexSpan = document.createElement('span');
+    indexSpan.className = 'source-index';
+    indexSpan.textContent = `[${index + 1}]`;
+    item.appendChild(indexSpan);
 
-    const title = document.createElement('div');
-    title.className = 'source-title';
-    const titleText = hit.title || hit.url || `Source ${index + 1}`;
+    const titleLink = document.createElement('a');
+    titleLink.href = source.url || '#';
+    titleLink.target = '_blank';
+    titleLink.rel = 'noopener noreferrer';
+    titleLink.className = 'source-link';
+    titleLink.textContent = source.title || source.url || `Source ${index + 1}`;
+    item.appendChild(titleLink);
 
-    if (hit.url) {
-      const link = document.createElement('a');
-      link.href = hit.url;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      link.textContent = titleText;
-      link.className = 'link';
-      title.appendChild(link);
-    } else {
-      title.textContent = titleText;
+    if (source.snippet) {
+      const snippetDiv = document.createElement('div');
+      snippetDiv.className = 'source-snippet-inline';
+      snippetDiv.textContent = (source.snippet || '').slice(0, 200) + '...';
+      item.appendChild(snippetDiv);
     }
 
-    const score = document.createElement('span');
-    score.className = 'source-score';
-    score.textContent = hit.score ? `Score ${hit.score.toFixed(2)}` : '';
-
-    header.appendChild(title);
-    header.appendChild(score);
-
-    const url = document.createElement('div');
-    url.className = 'source-url';
-    url.textContent = hit.url || '';
-
-    const snippet = document.createElement('div');
-    snippet.className = 'source-snippet';
-    const snippetText = document.createElement('p');
-    snippetText.className = 'source-snippet-text';
-    snippetText.textContent = hit.text || '';
-
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'source-snippet-toggle';
-    toggle.textContent = 'Expand';
-    toggle.addEventListener('click', () => {
-      snippet.classList.toggle('expanded');
-      toggle.textContent = snippet.classList.contains('expanded') ? 'Collapse' : 'Expand';
-    });
-
-    snippet.appendChild(snippetText);
-    if (hit.text) {
-      snippet.appendChild(toggle);
+    if (source.match_count > 1 || source.best_score) {
+      const metaDiv = document.createElement('div');
+      metaDiv.className = 'source-meta-inline';
+      const parts = [];
+      if (source.match_count > 1) {
+        parts.push(`${source.match_count} matches`);
+      }
+      if (source.best_score) {
+        parts.push(`score ${Number(source.best_score).toFixed(2)}`);
+      }
+      metaDiv.textContent = parts.join(' • ');
+      item.appendChild(metaDiv);
     }
 
-    item.appendChild(header);
-    if (hit.url) {
-      item.appendChild(url);
-    }
-    if (hit.text) {
-      item.appendChild(snippet);
-    }
     list.appendChild(item);
   });
 
-  details.appendChild(list);
-  return details;
+  container.appendChild(list);
+
+  // If there are more than 3 sources, add an expander
+  if (sources.length > 3) {
+    const moreBtn = document.createElement('button');
+    moreBtn.className = 'sources-more-btn';
+    moreBtn.textContent = `More sources (${sources.length - 3})`;
+    moreBtn.type = 'button';
+
+    const moreContainer = document.createElement('div');
+    moreContainer.className = 'sources-more-list';
+    moreContainer.style.display = 'none';
+
+    sources.slice(3).forEach((source, j) => {
+      const item = document.createElement('div');
+      item.className = 'source-item-inline';
+
+      const indexSpan = document.createElement('span');
+      indexSpan.className = 'source-index';
+      indexSpan.textContent = `[${3 + j + 1}]`;
+      item.appendChild(indexSpan);
+
+      const titleLink = document.createElement('a');
+      titleLink.href = source.url || '#';
+      titleLink.target = '_blank';
+      titleLink.rel = 'noopener noreferrer';
+      titleLink.className = 'source-link';
+      titleLink.textContent = source.title || source.url || `Source ${3 + j + 1}`;
+      item.appendChild(titleLink);
+
+      if (source.snippet) {
+        const snippetDiv = document.createElement('div');
+        snippetDiv.className = 'source-snippet-inline';
+        snippetDiv.textContent = (source.snippet || '').slice(0, 200) + '...';
+        item.appendChild(snippetDiv);
+      }
+
+      moreContainer.appendChild(item);
+    });
+
+    moreBtn.addEventListener('click', () => {
+      const isHidden = moreContainer.style.display === 'none';
+      moreContainer.style.display = isHidden ? 'block' : 'none';
+      moreBtn.textContent = isHidden ? 'Hide additional sources' : `More sources (${sources.length - 3})`;
+    });
+
+    container.appendChild(moreBtn);
+    container.appendChild(moreContainer);
+  }
+
+  return container;
 }
 
 function buildDebugPanel(content) {

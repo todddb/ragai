@@ -19,9 +19,20 @@ class ResearchHit(BaseModel):
     text: str
 
 
+class AggregatedDocument(BaseModel):
+    doc_id: str
+    title: str
+    url: str
+    best_score: float
+    total_score: float = 0.0
+    match_count: int = 1
+    snippet: str = ""
+
+
 class ResearchOutput(BaseModel):
     hits: List[ResearchHit]
     total_results: int
+    docs: List[AggregatedDocument] = Field(default_factory=list)
 
 
 class SynthesisOutput(BaseModel):

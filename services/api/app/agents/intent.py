@@ -14,6 +14,10 @@ async def analyze_intent(conversation_history: list, user_question: str) -> Inte
         '- "intent_label": string describing the user intent.\n'
         '- "search_queries": array of strings.\n'
         '- "success_criteria": array of strings.\n'
-        '- "context": string or null.\n'
+        '- "context": string or null.\n\n'
+        "IMPORTANT: If the user is asking about a specific named policy or the organization's official policy "
+        '(e.g., "What is the remote work policy?" or "What is THE remote work policy?"), set the "context" '
+        'field to a JSON-like string: "specific_policy: true". If the user is asking for a general definition '
+        '(e.g., "What is a remote work policy?"), set "context" to "specific_policy: false".\n'
     )
     return await call_ollama_json(prompt, IntentOutput)

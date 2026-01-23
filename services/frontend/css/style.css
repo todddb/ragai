@@ -324,6 +324,102 @@ body.page-chat .chat-layout {
   letter-spacing: 0.03em;
 }
 
+.sources-container {
+  margin-top: var(--spacing-md);
+  padding: var(--spacing-md);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: #f8fafc;
+}
+
+.sources-heading {
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-bottom: var(--spacing-sm);
+  color: var(--text-primary);
+}
+
+.sources-list-inline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.source-item-inline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-sm);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-white);
+}
+
+.source-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: var(--primary-blue);
+  color: var(--bg-white);
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-right: var(--spacing-xs);
+}
+
+.source-link {
+  color: var(--primary-blue);
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+
+.source-link:hover {
+  text-decoration: underline;
+}
+
+.source-snippet-inline {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  margin-left: 34px;
+}
+
+.source-meta-inline {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  margin-left: 34px;
+}
+
+.sources-more-btn {
+  margin-top: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-md);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  background: var(--bg-white);
+  color: var(--primary-blue);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.sources-more-btn:hover {
+  background: var(--primary-blue);
+  color: var(--bg-white);
+  border-color: var(--primary-blue);
+}
+
+.sources-more-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-sm);
+}
+
 .sources-list {
   display: flex;
   flex-direction: column;
