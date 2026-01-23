@@ -1,10 +1,12 @@
 import asyncio
+import hashlib
 import json
 import logging
+import mimetypes
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import parse_qsl, urljoin, urlparse, urlunparse
 
 import httpx
@@ -187,9 +189,146 @@ def _chunk_text(text: str, size: int, overlap: int) -> List[str]:
 
 
 def _content_hash(text: str) -> str:
-    import hashlib
-
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _file_content_hash(content: bytes) -> str:
+    """Generate SHA256 hash for binary file content."""
+    return hashlib.sha256(content).hexdigest()
+
+
+def _detect_artifact_type(url: str, content_type: Optional[str] = None) -> Optional[str]:
+    """
+    Detect if a URL points to a downloadable artifact (pdf, xlsx, pptx).
+    Returns the artifact type or None if it's a web page.
+    """
+    # Check by extension first
+    parsed = urlparse(url)
+    path = parsed.path.lower()
+
+    if path.endswith('.pdf'):
+        return 'pdf'
+    elif path.endswith('.xlsx') or path.endswith('.xls'):
+        return 'xlsx'
+    elif path.endswith('.pptx') or path.endswith('.ppt'):
+        return 'pptx'
+    elif path.endswith('.docx') or path.endswith('.doc'):
+        return 'docx'
+
+    # Check by content type if provided
+    if content_type:
+        content_type = content_type.lower()
+        if 'pdf' in content_type:
+            return 'pdf'
+        elif 'spreadsheet' in content_type or 'excel' in content_type:
+            return 'xlsx'
+        elif 'presentation' in content_type or 'powerpoint' in content_type:
+            return 'pptx'
+        elif 'word' in content_type or 'document' in content_type:
+            return 'docx'
+
+    return None
+
+
+def _is_artifact_allowed(url: str, artifact_type: str, config: Dict) -> Tuple[bool, Optional[Dict]]:
+    """
+    Check if the artifact type is allowed for the given URL based on allow_rules.
+    Returns (is_allowed, matching_rule).
+    """
+    allow_rules = config.get("allow_rules", [])
+
+    for rule in allow_rules:
+        if isinstance(rule, dict):
+            pattern = rule.get("pattern", "")
+            match_type = rule.get("match", "prefix")
+
+            # Check if URL matches this rule
+            matches = False
+            if match_type == "exact" and url == pattern:
+                matches = True
+            elif match_type != "exact" and pattern and url.startswith(pattern):
+                matches = True
+
+            if matches:
+                types = rule.get("types", {})
+                if isinstance(types, dict):
+                    is_allowed = types.get(artifact_type, False)
+                    return (is_allowed, rule)
+
+    # No matching rule found - default to not allowed for artifacts
+    return (False, None)
+
+
+def _download_artifact(
+    url: str,
+    artifact_type: str,
+    crawler_config: Dict,
+    auth_profile: Optional[str] = None,
+    allow_http: bool = False,
+) -> Dict:
+    """
+    Download an artifact (PDF, XLSX, PPTX, DOCX) and save it to artifact storage.
+    Returns artifact metadata including doc_id and content_hash.
+    """
+    url_config = crawler_config.get("url_canonicalization", {})
+    canonical = _canonicalize_url(url, url_config, allow_http)
+    headers = {"User-Agent": crawler_config.get("user_agent", "RagAI-Crawler/1.0")}
+    delay = crawler_config.get("request_delay", 1.0)
+    timeout = crawler_config.get("timeout", 30)
+
+    time.sleep(delay)
+
+    # Download the file using httpx
+    response = httpx.get(canonical, headers=headers, timeout=timeout, follow_redirects=True)
+    response.raise_for_status()
+
+    # Get content and calculate hash
+    content = response.content
+    content_hash = _file_content_hash(content)
+    doc_id = _doc_id_for_url(canonical)
+
+    # Extract filename from URL or Content-Disposition header
+    filename = None
+    if 'content-disposition' in response.headers:
+        cd = response.headers['content-disposition']
+        if 'filename=' in cd:
+            filename = cd.split('filename=')[-1].strip('"\'')
+
+    if not filename:
+        filename = Path(urlparse(canonical).path).name or f"artifact.{artifact_type}"
+
+    # Create artifact directory
+    artifact_path = ARTIFACT_DIR / doc_id
+    artifact_path.mkdir(parents=True, exist_ok=True)
+
+    # Save the binary file
+    file_path = artifact_path / filename
+    file_path.write_bytes(content)
+
+    # Create artifact metadata
+    artifact = {
+        "doc_id": doc_id,
+        "url": canonical,
+        "canonical_url": canonical,
+        "content_hash": content_hash,
+        "fetched_at": datetime.utcnow().isoformat() + "Z",
+        "artifact_type": artifact_type,
+        "filename": filename,
+        "file_size": len(content),
+        "content_type": response.headers.get("content-type"),
+        "title": filename,  # Use filename as title for artifacts
+        "text": "",  # Artifacts don't have extracted text yet (requires processing)
+    }
+
+    if auth_profile:
+        artifact["auth_profile"] = auth_profile
+
+    # Save metadata
+    (artifact_path / "artifact.json").write_text(
+        json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    return artifact
 
 
 def _match_auth_redirect(target: str) -> str | None:
@@ -501,6 +640,14 @@ def run_crawl_job(log, job_id: str = None) -> None:
         "crawled": 0,
         "captured": 0,
         "artifacts_written": 0,
+        "artifacts": {
+            "pdf_saved": 0,
+            "xlsx_saved": 0,
+            "pptx_saved": 0,
+            "docx_saved": 0,
+            "skipped_not_allowed": 0,
+            "download_failed": 0
+        },
         "errors": 0,
         "skipped": {
             "already_processed": 0,
@@ -566,20 +713,56 @@ def run_crawl_job(log, job_id: str = None) -> None:
             if allow_rule:
                 auth_profile = allow_rule.get("auth_profile") or allow_rule.get("authProfile")
 
-            if fetch_mode == "playwright":
-                links = _capture_url_playwright(
-                    url,
-                    url_allow_http,
-                    auth_profile,
-                    crawler_config,
-                    allow_block,
-                )
+            # Check if this URL is a downloadable artifact
+            artifact_type = _detect_artifact_type(url)
+
+            if artifact_type:
+                # Handle as artifact download
+                is_allowed, matching_rule = _is_artifact_allowed(url, artifact_type, allow_block)
+
+                if not is_allowed:
+                    metrics["artifacts"]["skipped_not_allowed"] += 1
+                    log(f"Skipped {artifact_type.upper()} artifact (not allowed): {url}")
+                    processed.add(url)
+                    _save_processed(processed)
+                    continue
+
+                try:
+                    artifact = _download_artifact(
+                        url,
+                        artifact_type,
+                        crawler_config,
+                        auth_profile,
+                        url_allow_http
+                    )
+                    metrics["artifacts"][f"{artifact_type}_saved"] += 1
+                    metrics["artifacts_written"] += 1
+                    metrics["captured"] += 1
+                    log(f"Downloaded {artifact_type.upper()} artifact: {url} ({artifact['file_size']} bytes)")
+                except Exception as exc:
+                    metrics["artifacts"]["download_failed"] += 1
+                    metrics["errors"] += 1
+                    error_msg = f"{url}: Artifact download failed - {str(exc)}"
+                    if len(metrics["error_details"]) < 10:
+                        metrics["error_details"].append(error_msg)
+                    log(f"Error downloading artifact {url}: {exc}")
+
             else:
-                links = _capture_url_http(url, url_allow_http)
-            _append_candidates(links, url, depth + 1, max_depth, url_allow_http)
-            metrics["captured"] += 1
-            metrics["artifacts_written"] += 1
-            log(f"Captured {url} with {len(links)} link(s)")
+                # Handle as web page
+                if fetch_mode == "playwright":
+                    links = _capture_url_playwright(
+                        url,
+                        url_allow_http,
+                        auth_profile,
+                        crawler_config,
+                        allow_block,
+                    )
+                else:
+                    links = _capture_url_http(url, url_allow_http)
+                _append_candidates(links, url, depth + 1, max_depth, url_allow_http)
+                metrics["captured"] += 1
+                metrics["artifacts_written"] += 1
+                log(f"Captured {url} with {len(links)} link(s)")
         except AuthRequiredError as exc:
             metrics["skipped"]["auth_required"] += 1
             record_auth_hint(exc.auth_info)
@@ -645,6 +828,14 @@ def run_crawl_job(log, job_id: str = None) -> None:
     log(f"  URLs crawled: {metrics['crawled']}")
     log(f"  Successfully captured: {metrics['captured']}")
     log(f"  Artifacts written: {metrics['artifacts_written']}")
+    log("")
+    log("  Artifacts:")
+    log(f"    PDFs saved: {metrics['artifacts']['pdf_saved']}")
+    log(f"    XLSX saved: {metrics['artifacts']['xlsx_saved']}")
+    log(f"    PPTX saved: {metrics['artifacts']['pptx_saved']}")
+    log(f"    DOCX saved: {metrics['artifacts']['docx_saved']}")
+    log(f"    Skipped (not allowed): {metrics['artifacts']['skipped_not_allowed']}")
+    log(f"    Download failed: {metrics['artifacts']['download_failed']}")
     log("")
     log("  Skipped:")
     log(f"    Already processed: {metrics['skipped']['already_processed']}")

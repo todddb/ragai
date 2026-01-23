@@ -9,7 +9,7 @@
       document.documentElement.classList.add('sidebar-collapsed');
     }
   </script>
-  <link rel="stylesheet" href="css/style.css?v=2" />
+  <link rel="stylesheet" href="css/style.css?v=__ASSET_VERSION__" />
   <!-- dayjs for relative timestamps -->
   <script src="https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/relativeTime.js"></script>
@@ -72,14 +72,17 @@
     </section>
   </main>
 
-  <div class="footer">© 2026 AI RAG Assistant</div>
+  <div class="footer">
+    <span>© 2026 AI RAG Assistant</span>
+    <span class="build-version">v__ASSET_VERSION__</span>
+  </div>
 
   <script>
     window.API_URL = window.API_URL || localStorage.getItem('API_URL');
   </script>
-  <script src="js/config.js?v=2"></script>
+  <script src="js/config.js?v=__ASSET_VERSION__"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="js/chat.js?v=2"></script>
-  <script src="js/sidebar.js?v=2"></script>
+  <script src="js/chat.js?v=__ASSET_VERSION__"></script>
+  <script src="js/sidebar.js?v=__ASSET_VERSION__"></script>
 </body>
 </html>

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Admin</title>
-  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/style.css?v=__ASSET_VERSION__" />
 </head>
 <body>
   <header>
@@ -29,7 +29,10 @@
     <button class="btn btn-primary" onclick="location.href='settings.html'">Go to Settings</button>
   </main>
 
-  <div class="footer">© 2026 AI RAG Assistant</div>
+  <div class="footer">
+    <span>© 2026 AI RAG Assistant</span>
+    <span class="build-version">v__ASSET_VERSION__</span>
+  </div>
 
 </body>
 </html>

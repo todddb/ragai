@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Conversations</title>
-  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/style.css?v=__ASSET_VERSION__" />
 </head>
 <body>
   <header>
@@ -25,12 +25,15 @@
     <div id="conversationList" class="conversation-list"></div>
   </main>
 
-  <div class="footer">© 2026 AI RAG Assistant</div>
+  <div class="footer">
+    <span>© 2026 AI RAG Assistant</span>
+    <span class="build-version">v__ASSET_VERSION__</span>
+  </div>
 
   <script>
     window.API_URL = window.API_URL || localStorage.getItem('API_URL');
   </script>
-  <script src="js/config.js"></script>
-  <script src="js/conversations.js"></script>
+  <script src="js/config.js?v=__ASSET_VERSION__"></script>
+  <script src="js/conversations.js?v=__ASSET_VERSION__"></script>
 </body>
 </html>
