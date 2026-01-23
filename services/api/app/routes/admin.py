@@ -21,7 +21,7 @@ from app.utils.auth_validation import (
 from app.utils.config import refresh_config, write_yaml_config
 from app.utils.jobs import delete_job, get_job, list_jobs, start_job
 from app.utils.ollama_embed import embed_text
-from app.workers.ingest_worker import DB_PATH, run_ingest_job
+from app.workers.ingest_worker import DB_PATH, ensure_metadata_db_initialized, run_ingest_job
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -618,6 +618,63 @@ async def reset_crawl() -> Dict[str, Any]:
     return {"status": "ok", "deleted": deleted_items}
 
 
+@router.get("/ingest-metadata/status")
+async def get_ingest_metadata_status() -> Dict[str, Any]:
+    """Get status of the ingest metadata database."""
+    import sqlite3
+
+    status = {
+        "db_path": str(DB_PATH),
+        "exists": DB_PATH.exists(),
+        "size_bytes": 0,
+        "tables_present": [],
+        "doc_count": 0,
+        "chunk_count": 0,
+        "schema_version": 0,
+        "initialized": False,
+    }
+
+    if not DB_PATH.exists():
+        return status
+
+    try:
+        status["size_bytes"] = DB_PATH.stat().st_size
+
+        # Ensure schema is initialized
+        ensure_metadata_db_initialized()
+
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        # Check which tables exist
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
+        tables = [row[0] for row in cursor.fetchall()]
+        status["tables_present"] = tables
+
+        # Get counts if tables exist
+        if "documents" in tables:
+            cursor.execute("SELECT COUNT(*) FROM documents")
+            status["doc_count"] = cursor.fetchone()[0]
+
+        if "chunks" in tables:
+            cursor.execute("SELECT COUNT(*) FROM chunks")
+            status["chunk_count"] = cursor.fetchone()[0]
+
+        # Get schema version
+        cursor.execute("PRAGMA user_version")
+        status["schema_version"] = cursor.fetchone()[0]
+
+        # Mark as initialized if we have the expected tables
+        status["initialized"] = "documents" in tables and "chunks" in tables
+
+        conn.close()
+
+    except Exception as e:
+        status["error"] = str(e)
+
+    return status
+
+
 @router.post("/reset_ingest")
 async def reset_ingest() -> Dict[str, Any]:
     """Reset ingest state by deleting metadata database."""
@@ -625,8 +682,9 @@ async def reset_ingest() -> Dict[str, Any]:
     deleted_items = []
 
     if DB_PATH.exists():
-        # Count records before deleting
+        # Count records before deleting (ensure schema exists first)
         try:
+            ensure_metadata_db_initialized()
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             doc_count = cursor.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
@@ -1117,37 +1175,37 @@ async def check_url(payload: Dict[str, Any]) -> Dict[str, Any]:
         result["validation"] = {"found": False, "error": "No validation summary available"}
 
     # Check ingest status
-    if DB_PATH.exists():
-        try:
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
+    try:
+        # Ensure schema is initialized before querying
+        ensure_metadata_db_initialized()
 
-            # Find document by URL
-            cursor.execute("SELECT doc_id, url, ingested_at FROM documents WHERE url = ?", (url,))
-            doc_row = cursor.fetchone()
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
 
-            if doc_row:
-                doc_id, doc_url, ingested_at = doc_row
+        # Find document by URL
+        cursor.execute("SELECT doc_id, url, ingested_at FROM documents WHERE url = ?", (url,))
+        doc_row = cursor.fetchone()
 
-                # Count chunks for this document
-                cursor.execute("SELECT COUNT(*) FROM chunks WHERE doc_id = ?", (doc_id,))
-                chunk_count = cursor.fetchone()[0]
+        if doc_row:
+            doc_id, doc_url, ingested_at = doc_row
 
-                result["ingest"] = {
-                    "found": True,
-                    "doc_id": doc_id,
-                    "url": doc_url,
-                    "chunk_count": chunk_count,
-                    "ingested_at": ingested_at,
-                }
-            else:
-                result["ingest"] = {"found": False}
+            # Count chunks for this document
+            cursor.execute("SELECT COUNT(*) FROM chunks WHERE doc_id = ?", (doc_id,))
+            chunk_count = cursor.fetchone()[0]
 
-            conn.close()
-        except Exception as e:
-            result["ingest"] = {"found": False, "error": str(e)}
-    else:
-        result["ingest"] = {"found": False, "error": "metadata.db not found"}
+            result["ingest"] = {
+                "found": True,
+                "doc_id": doc_id,
+                "url": doc_url,
+                "chunk_count": chunk_count,
+                "ingested_at": ingested_at,
+            }
+        else:
+            result["ingest"] = {"found": False}
+
+        conn.close()
+    except Exception as e:
+        result["ingest"] = {"found": False, "error": str(e)}
 
     # Check Qdrant
     try:
