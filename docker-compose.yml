@@ -20,7 +20,7 @@ services:
     restart: unless-stopped
 
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.16.3
     container_name: ragai-qdrant
     volumes:
       - ./qdrant_storage:/qdrant/storage
