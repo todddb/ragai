@@ -286,19 +286,18 @@ function buildDebugPanel(content) {
 function addMessage(role, text, timestamp, content = null) {
   const container = document.getElementById('chatContainer');
   const message = document.createElement('div');
-  message.className = `message ${role}`;
+  message.className = `msg-row msg-${role}`;
 
   let statusLine = null;
   let contentNode = null;
 
-  // Add avatar for both user and assistant messages
+  // Create avatar for both user and assistant messages
   const avatar = document.createElement('div');
-  avatar.className = role === 'assistant' ? 'avatar ai-avatar' : 'avatar user-avatar';
+  avatar.className = 'avatar';
   avatar.textContent = role === 'assistant' ? 'AI' : 'USER';
-  message.appendChild(avatar);
 
   const bubble = document.createElement('div');
-  bubble.className = 'message-bubble';
+  bubble.className = 'bubble';
   if (role === 'assistant') {
     statusLine = document.createElement('div');
     statusLine.className = 'assistant-status';
@@ -339,7 +338,16 @@ function addMessage(role, text, timestamp, content = null) {
 
   wrapper.appendChild(meta);
 
-  message.appendChild(wrapper);
+  // For AI messages: avatar first, then wrapper
+  // For USER messages: wrapper first, then avatar
+  if (role === 'assistant') {
+    message.appendChild(avatar);
+    message.appendChild(wrapper);
+  } else {
+    message.appendChild(wrapper);
+    message.appendChild(avatar);
+  }
+
   container.appendChild(message);
   container.scrollTop = container.scrollHeight;
   return { bubble, statusLine, contentNode };
