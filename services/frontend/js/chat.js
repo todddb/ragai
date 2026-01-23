@@ -168,10 +168,13 @@ function buildSourcesPanel(content) {
     const item = document.createElement('div');
     item.className = 'source-item-inline';
 
-    const indexSpan = document.createElement('span');
-    indexSpan.className = 'source-index';
-    indexSpan.textContent = `[${index + 1}]`;
-    item.appendChild(indexSpan);
+    // Header with citation number and title
+    const header = document.createElement('div');
+    header.className = 'source-header';
+
+    const citation = document.createElement('span');
+    citation.className = 'source-citation';
+    citation.textContent = `[${index + 1}] `;
 
     const titleLink = document.createElement('a');
     titleLink.href = source.url || '#';
@@ -179,8 +182,20 @@ function buildSourcesPanel(content) {
     titleLink.rel = 'noopener noreferrer';
     titleLink.className = 'source-link';
     titleLink.textContent = source.title || source.url || `Source ${index + 1}`;
-    item.appendChild(titleLink);
 
+    header.appendChild(citation);
+    header.appendChild(titleLink);
+    item.appendChild(header);
+
+    // URL
+    if (source.url) {
+      const urlDiv = document.createElement('div');
+      urlDiv.className = 'source-url';
+      urlDiv.textContent = source.url;
+      item.appendChild(urlDiv);
+    }
+
+    // Snippet
     if (source.snippet) {
       const snippetDiv = document.createElement('div');
       snippetDiv.className = 'source-snippet-inline';
@@ -188,6 +203,7 @@ function buildSourcesPanel(content) {
       item.appendChild(snippetDiv);
     }
 
+    // Metadata (matches and score)
     if (source.match_count > 1 || source.best_score) {
       const metaDiv = document.createElement('div');
       metaDiv.className = 'source-meta-inline';
@@ -222,10 +238,13 @@ function buildSourcesPanel(content) {
       const item = document.createElement('div');
       item.className = 'source-item-inline';
 
-      const indexSpan = document.createElement('span');
-      indexSpan.className = 'source-index';
-      indexSpan.textContent = `[${3 + j + 1}]`;
-      item.appendChild(indexSpan);
+      // Header with citation number and title
+      const header = document.createElement('div');
+      header.className = 'source-header';
+
+      const citation = document.createElement('span');
+      citation.className = 'source-citation';
+      citation.textContent = `[${3 + j + 1}] `;
 
       const titleLink = document.createElement('a');
       titleLink.href = source.url || '#';
@@ -233,13 +252,40 @@ function buildSourcesPanel(content) {
       titleLink.rel = 'noopener noreferrer';
       titleLink.className = 'source-link';
       titleLink.textContent = source.title || source.url || `Source ${3 + j + 1}`;
-      item.appendChild(titleLink);
 
+      header.appendChild(citation);
+      header.appendChild(titleLink);
+      item.appendChild(header);
+
+      // URL
+      if (source.url) {
+        const urlDiv = document.createElement('div');
+        urlDiv.className = 'source-url';
+        urlDiv.textContent = source.url;
+        item.appendChild(urlDiv);
+      }
+
+      // Snippet
       if (source.snippet) {
         const snippetDiv = document.createElement('div');
         snippetDiv.className = 'source-snippet-inline';
         snippetDiv.textContent = (source.snippet || '').slice(0, 200) + '...';
         item.appendChild(snippetDiv);
+      }
+
+      // Metadata (matches and score) - only if available
+      if (source.match_count > 1 || source.best_score) {
+        const metaDiv = document.createElement('div');
+        metaDiv.className = 'source-meta-inline';
+        const parts = [];
+        if (source.match_count > 1) {
+          parts.push(`${source.match_count} matches`);
+        }
+        if (source.best_score) {
+          parts.push(`score ${Number(source.best_score).toFixed(2)}`);
+        }
+        metaDiv.textContent = parts.join(' • ');
+        item.appendChild(metaDiv);
       }
 
       moreContainer.appendChild(item);

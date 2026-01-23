@@ -27,9 +27,13 @@ async def synthesize_answer(intent: dict, research: dict, docs: list = None) -> 
         policy_instruction = (
             "\n\nIMPORTANT - This is a SPECIFIC POLICY QUESTION:\n"
             "- Answer about the organization's specific policy, NOT a general definition\n"
-            "- Use ONLY the provided documents - do not invent policy text\n"
-            "- Include inline citations using [1], [2], etc. for statements from specific documents\n"
+            "- Use ONLY the provided documents - do not invent policy text or add information from general knowledge\n"
+            "- NEVER flip or invert the meaning of snippets (e.g., if a source says 'discontinuing', do NOT say 'continuing')\n"
+            "- Include inline citations using [1], [2], etc. for EVERY claim from specific documents\n"
+            "- Include 1-2 SHORT direct quotes (≤25 words each) from sources for key policy details\n"
             "- Keep the answer concise (2-5 sentences) and focus on the top 2-3 most relevant sources\n"
+            "- If top sources are BYU policy pages, assume the question is about BYU - do NOT ask 'which organization?'\n"
+            "- If information is not in the sources, state 'Not found in provided sources'\n"
             "- Use the numbered sources from the list above for your citations\n"
         )
 

@@ -21,7 +21,14 @@ async def validate_answer(question: str, draft_answer: str, research: dict, inte
     if is_specific_policy and not has_citations:
         citation_check = (
             "\n\nWARNING: This is a specific policy question but the draft answer lacks inline citations [1], [2], etc. "
-            "Consider marking this as needs_clarification if the answer should be more specific and cite sources.\n"
+            "Reject this answer (status='needs_clarification') and ask for a properly cited response.\n"
+        )
+
+    # Additional check: if answer seems to contradict common policy patterns
+    if draft_answer and "continue" in draft_answer.lower() and "discontinu" in str(research).lower():
+        citation_check += (
+            "\n\nWARNING: Draft answer mentions 'continue/continuing' but research contains 'discontinu'. "
+            "Verify the answer doesn't flip the meaning of source snippets. Reject if contradictory.\n"
         )
 
     prompt = (

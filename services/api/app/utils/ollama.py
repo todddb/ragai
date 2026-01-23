@@ -131,9 +131,18 @@ async def call_ollama_json(prompt: str, schema: Type[T]) -> T:
     async with httpx.AsyncClient(timeout=60.0) as client:
         # The exact request body / headers depend on your Ollama usage.
         # This mirrors a typical generate call and ensures prompt is passed through.
+        # Use deterministic settings for consistent, grounded answers
         try:
             logger.info("Calling Ollama model=%s endpoint=%s", OLLAMA_MODEL, OLLAMA_URL)
-            resp = await client.post(OLLAMA_URL, json={"model": OLLAMA_MODEL, "prompt": prompt})
+            resp = await client.post(OLLAMA_URL, json={
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "options": {
+                    "temperature": 0.0,
+                    "top_p": 0.1,
+                    "repeat_penalty": 1.05
+                }
+            })
             resp.raise_for_status()
         except Exception as e:
             logger.exception("Error calling Ollama generate endpoint")
@@ -240,7 +249,15 @@ async def call_ollama_json(prompt: str, schema: Type[T]) -> T:
         async with httpx.AsyncClient(timeout=60.0) as client:
             try:
                 logger.info("Calling Ollama (repair) model=%s endpoint=%s", OLLAMA_MODEL, OLLAMA_URL)
-                resp2 = await client.post(OLLAMA_URL, json={"model": OLLAMA_MODEL, "prompt": repair_prompt})
+                resp2 = await client.post(OLLAMA_URL, json={
+                    "model": OLLAMA_MODEL,
+                    "prompt": repair_prompt,
+                    "options": {
+                        "temperature": 0.0,
+                        "top_p": 0.1,
+                        "repeat_penalty": 1.05
+                    }
+                })
                 resp2.raise_for_status()
                 # reuse the same NDJSON-aware extraction logic for the repair response
                 raw_body2 = None

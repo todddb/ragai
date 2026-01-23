@@ -415,25 +415,22 @@ body.page-chat .chat-layout {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-xs);
-  padding: var(--spacing-sm);
+  padding: var(--spacing-md);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
   background: var(--bg-white);
 }
 
-.source-index {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 28px;
-  height: 20px;
-  padding: 0 6px;
-  border-radius: var(--radius-sm);
-  background: var(--primary-blue);
-  color: var(--bg-white);
-  font-size: 0.75rem;
-  font-weight: 600;
-  margin-right: var(--spacing-xs);
+.source-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+}
+
+.source-citation {
+  color: var(--text-tertiary);
+  font-size: 0.85rem;
+  font-weight: 500;
 }
 
 .source-link {
@@ -447,17 +444,24 @@ body.page-chat .chat-layout {
   text-decoration: underline;
 }
 
+.source-url {
+  font-size: 0.8rem;
+  color: var(--text-tertiary);
+  word-break: break-all;
+  margin-top: 2px;
+}
+
 .source-snippet-inline {
   font-size: 0.85rem;
   color: var(--text-secondary);
   line-height: 1.4;
-  margin-left: 34px;
+  margin-top: var(--spacing-xs);
 }
 
 .source-meta-inline {
   font-size: 0.75rem;
   color: var(--text-tertiary);
-  margin-left: 34px;
+  margin-top: 2px;
 }
 
 .sources-more-btn {
