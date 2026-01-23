@@ -81,11 +81,15 @@
                 </div>
               </div>
               <div class="field-help" style="margin-bottom: 1rem;">
-                Crawling is performed by the API container using config/crawler.yml settings. All Playwright authentication profiles and crawl behavior are configured below.
+                Crawling is performed by the API container using config/crawler.yml settings. All auth profiles and crawl behavior are configured below.
               </div>
 
               <div class="field">
                 <h3 class="section-heading">Seed URLs</h3>
+                <p class="section-help">
+                  Starting points for discovery. Use top-level pages you want the crawler to expand from, not login screens or deep content unless required.
+                </p>
+                <p class="section-help">Example: https://policy.byu.edu/</p>
                 <div id="seedList" class="seed-table"></div>
                 <div class="list-add">
                   <input id="seedAddInput" type="text" placeholder="https://www.example.com/site/" />
@@ -100,8 +104,12 @@
               <div class="field" style="margin-top: 1.5rem;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                   <h3 class="section-heading" style="margin: 0; border: none; padding: 0;">Allowed URLs</h3>
-                  <a href="#authProfiles" class="link" style="font-size: 0.85rem;" onclick="document.getElementById('playwrightEnabled').scrollIntoView({behavior: 'smooth', block: 'center'}); return false;">Manage Auth Profiles ↓</a>
+                  <a href="#authProfiles" class="link" style="font-size: 0.85rem;" onclick="document.getElementById('authProfiles').scrollIntoView({behavior: 'smooth', block: 'center'}); return false;">Manage Auth Profiles ↓</a>
                 </div>
+                <p class="section-help">
+                  Controls what may be captured and how. Selecting an auth profile implies Playwright is used for that URL rule.
+                </p>
+                <p class="section-help">Example: allow prefix https://policy.byu.edu/ and assign policy_cas.</p>
                 <div class="allowed-table" id="allowTable"></div>
                 <div class="list-add">
                   <input id="allowAddInput" type="text" placeholder="https://www.byu.edu/hr/" />
@@ -130,6 +138,9 @@
 
               <div class="field">
                 <h3 class="section-heading">Blocked Domains</h3>
+                <p class="section-help">
+                  Domains never captured or enqueued. Keep CAS blocked to avoid indexing login pages—Playwright can still navigate through CAS during auth.
+                </p>
                 <div id="blockedList" class="list"></div>
                 <div class="list-add">
                   <input id="blockedAddInput" type="text" placeholder="example.com" />
@@ -147,10 +158,14 @@
                 </div>
               </div>
 
-              <div class="field" style="margin-bottom: 1.5rem;">
-                <label class="field-label" for="playwrightEnabled">Playwright enabled</label>
-                <input type="checkbox" id="playwrightEnabled" />
-                <div class="field-help">Master toggle for Playwright-based authenticated crawling.</div>
+              <p class="section-help">
+                Auth profiles store login state for protected sites. Storage states expire over time (BYU CAS sessions often expire within ~24 hours), so recapture when tests fail.
+              </p>
+              <p class="section-help">
+                Use “Test Auth” to validate a profile against its test URL (or the first protected Allowed URL if none is set).
+              </p>
+              <div id="playwrightWarning" class="warning-banner" style="display: none;">
+                Playwright is not available in this environment. Auth checks cannot be run until Playwright is installed.
               </div>
 
               <div id="migrationBanner" style="display: none; padding: 12px; background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; margin-bottom: 1rem;">
@@ -161,7 +176,7 @@
                 <button class="btn btn-small" id="migrateLegacyBtn" style="margin-top: 8px;">Migrate to Auth Profiles</button>
               </div>
 
-              <div class="field">
+              <div class="field" id="authProfiles">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                   <h4 style="margin: 0; font-size: 1rem; font-weight: 600;">Auth Profiles</h4>
                   <button class="btn btn-small" id="addAuthProfileBtn">+ Add Profile</button>
@@ -188,26 +203,13 @@
                   <div class="field-help">Path to Playwright storage state file (relative to repo root, or absolute).</div>
                 </div>
                 <div class="field">
-                  <label class="field-label" for="profileUseDomains">Use-for domains (optional)</label>
-                  <textarea id="profileUseDomains" rows="3" placeholder="policy.byu.edu&#10;auth.example.com"></textarea>
-                  <div class="field-help">Auto-apply this profile to these domains (one per line). This is a hint; per-URL auth profile assignment takes precedence.</div>
-                </div>
-                <div class="field">
                   <label class="field-label" for="profileTestUrl">Test URL (optional)</label>
                   <input type="text" id="profileTestUrl" placeholder="https://policy.byu.edu/view/business-gifts-and-entertainment-policy" />
-                  <div class="field-help">If provided, this URL is used for auth validation. Defaults to https://&lt;domain&gt;/ or the first seed URL for that domain.</div>
+                  <div class="field-help">If provided, this URL is used for auth validation. Otherwise we test the first protected Allowed URL assigned to the profile, or its start URL.</div>
                 </div>
                 <div class="actions-row">
                   <button class="btn btn-primary" id="saveProfileBtn">Save Profile</button>
                   <span class="status-text" id="profileEditorStatus"></span>
-                </div>
-              </div>
-
-              <div class="field" style="margin-top: 1.5rem;">
-                <h4 style="margin: 0 0 8px 0; font-size: 1rem; font-weight: 600;">Diagnostics & Tools</h4>
-                <div id="authDiagnostics" style="font-size: 0.85rem; color: var(--text-secondary);"></div>
-                <div style="margin-top: 8px;">
-                  <a href="#" id="openCaptureInstructions" class="link" style="font-size: 0.85rem;">View capture instructions</a>
                 </div>
               </div>
             </section>

@@ -5,8 +5,8 @@ let cachedCrawlerConfig = {};
 let cachedIngestConfig = {};
 let ingestWorkerPoller = null;
 let authProfiles = [];
-let authHints = { by_domain: {}, recent: [] };
 let authStatusCache = { results: {}, updatedAt: null };
+let allowedUrlAuthStatus = { byRuleId: {}, byPattern: {}, updatedAt: null, playwrightAvailable: true };
 const crawlState = {
   seeds: [],
   blocked: [],
@@ -54,29 +54,29 @@ function normalizeTypes(types) {
 function normalizeAllowRule(rule) {
   if (!rule) {
     return {
+      id: null,
       pattern: '',
       match: 'prefix',
       types: getTypeDefaults(),
-      playwright: false,
       allow_http: false,
       auth_profile: null
     };
   }
   if (typeof rule === 'string') {
     return {
+      id: null,
       pattern: rule,
       match: 'prefix',
       types: getTypeDefaults(),
-      playwright: false,
       allow_http: false,
       auth_profile: null
     };
   }
   return {
+    id: rule.id || null,
     pattern: rule.pattern || '',
     match: rule.match || 'prefix',
     types: normalizeTypes(rule.types),
-    playwright: Boolean(rule.playwright),
     allow_http: Boolean(rule.allow_http),
     auth_profile: rule.auth_profile || rule.authProfile || null
   };
@@ -331,7 +331,6 @@ async function saveAllowedUrlRow(rule, statusElement) {
       pattern: rule.pattern,
       match: rule.match || 'prefix',
       types: rule.types || {},
-      playwright: rule.playwright || false,
       allow_http: rule.allow_http || false,
       auth_profile: rule.auth_profile || null
     };
@@ -433,7 +432,7 @@ function renderAllowTable() {
   header.innerHTML = `
     <div>URL</div>
     <div>Match</div>
-    <div>Auth</div>
+    <div>Auth Status</div>
     <div>Auth Profile</div>
     <div>Web</div>
     <div>PDF</div>
@@ -477,16 +476,14 @@ function renderAllowTable() {
       matchCell = badge;
     }
 
-    const authHint = getAuthHintForRule(rule);
     const authCell = document.createElement('div');
-    if (authHint) {
-      const badge = document.createElement('span');
-      badge.className = 'auth-hint';
-      badge.textContent = '🔒';
-      badge.title = authHint.tooltip || 'Auth likely: Crawl attempts redirected to login.';
-      badge.style.cursor = 'help';
-      authCell.appendChild(badge);
-    }
+    const authStatus = getAllowedUrlStatusIcon(rule);
+    const statusBadge = document.createElement('span');
+    statusBadge.className = `auth-status-icon ${authStatus.className}`;
+    statusBadge.textContent = authStatus.icon;
+    statusBadge.title = authStatus.tooltip;
+    statusBadge.style.cursor = 'help';
+    authCell.appendChild(statusBadge);
 
     let authProfileCell;
     if (editState.allow === index) {
@@ -501,15 +498,27 @@ function renderAllowTable() {
         option.textContent = name;
         select.appendChild(option);
       });
+      if (rule.auth_profile && !authProfiles.includes(rule.auth_profile)) {
+        const legacyOption = document.createElement('option');
+        legacyOption.value = rule.auth_profile;
+        legacyOption.textContent = `Legacy: ${rule.auth_profile}`;
+        select.appendChild(legacyOption);
+      }
       select.value = rule.auth_profile || '';
       select.addEventListener('change', () => {
         rule.auth_profile = select.value || null;
+        setAllowedUrlStatus(rule, { ui_status: rule.auth_profile ? 'unknown' : 'unknown' });
+        renderAllowTable();
       });
       authProfileCell = select;
     } else {
       const label = document.createElement('span');
       label.className = 'auth-profile-label';
-      label.textContent = rule.auth_profile || 'None';
+      if (rule.auth_profile === 'default') {
+        label.textContent = 'Legacy (hidden)';
+      } else {
+        label.textContent = rule.auth_profile || 'None';
+      }
       authProfileCell = label;
     }
 
@@ -575,8 +584,7 @@ function renderAllowTable() {
         const success = await saveAllowedUrlRow(rule, statusCell);
         if (success) {
           editState.allow = null;
-          renderAllowTable();
-          renderRecommendations();
+          await loadConfigs();
         }
       } else {
         editState.allow = index;
@@ -593,9 +601,7 @@ function renderAllowTable() {
         // Delete the row from backend first
         const success = await deleteAllowedUrlRow(rule, statusCell);
         if (success) {
-          crawlState.allowRules.splice(index, 1);
-          renderAllowTable();
-          renderRecommendations();
+          await loadConfigs();
         }
       }
     });
@@ -663,7 +669,6 @@ function renderRecommendations() {
           pattern: normalized,
           match: 'prefix',
           types,
-          playwright: false,
           allow_http: false,
           auth_profile: null
         });
@@ -705,30 +710,82 @@ function getRuleHost(pattern) {
   return host;
 }
 
-function ruleMatchesUrl(rule, url) {
-  if (!rule || !url) return false;
-  if (rule.match === 'exact') {
-    return rule.pattern === url;
+function getAllowedUrlStatus(rule) {
+  if (!rule) return null;
+  if (rule.id && allowedUrlAuthStatus.byRuleId?.[rule.id]) {
+    return allowedUrlAuthStatus.byRuleId[rule.id];
   }
-  return url.startsWith(rule.pattern);
-}
-
-function getAuthHintForRule(rule) {
-  const recentHints = authHints?.recent || [];
-  const matchHint = recentHints.find((hint) => ruleMatchesUrl(rule, hint.original_url || ''));
-  if (matchHint) {
-    return {
-      tooltip: `Crawl attempts redirected to login (${matchHint.redirect_host || 'auth host'}).`
-    };
-  }
-  const host = getRuleHost(rule.pattern || '');
-  if (host && authHints?.by_domain?.[host]) {
-    const domainHint = authHints.by_domain[host];
-    return {
-      tooltip: `Crawl attempts redirected to login (${domainHint.redirect_host || 'auth host'}).`
-    };
+  if (allowedUrlAuthStatus.byPattern?.[rule.pattern]) {
+    return allowedUrlAuthStatus.byPattern[rule.pattern];
   }
   return null;
+}
+
+function setAllowedUrlStatus(rule, status) {
+  if (!rule) return;
+  if (rule.id) {
+    allowedUrlAuthStatus.byRuleId = allowedUrlAuthStatus.byRuleId || {};
+    allowedUrlAuthStatus.byRuleId[rule.id] = status;
+  } else if (rule.pattern) {
+    allowedUrlAuthStatus.byPattern = allowedUrlAuthStatus.byPattern || {};
+    allowedUrlAuthStatus.byPattern[rule.pattern] = status;
+  }
+}
+
+function getAllowedUrlStatusIcon(rule) {
+  const status = getAllowedUrlStatus(rule);
+  const authProfile = rule.auth_profile;
+  const playwrightAvailable = allowedUrlAuthStatus.playwrightAvailable !== false;
+
+  if (authProfile && !playwrightAvailable) {
+    return {
+      icon: '⚠️',
+      className: 'cannot-test',
+      tooltip: 'Playwright is unavailable in this environment. Auth checks cannot run.'
+    };
+  }
+
+  const uiStatus = status?.ui_status;
+  if (uiStatus === 'valid') {
+    return {
+      icon: '✅',
+      className: 'valid',
+      tooltip: 'Auth profile configured and validated.'
+    };
+  }
+  if (uiStatus === 'invalid') {
+    return {
+      icon: '❌',
+      className: 'invalid',
+      tooltip: 'Auth profile configured but test failed. Refresh the storage state.'
+    };
+  }
+  if (uiStatus === 'needs_profile') {
+    return {
+      icon: '🔒',
+      className: 'needs',
+      tooltip: 'Authentication appears required. Assign an auth profile to use Playwright.'
+    };
+  }
+  if (uiStatus === 'cannot_test') {
+    return {
+      icon: '⚠️',
+      className: 'cannot-test',
+      tooltip: 'Playwright is unavailable in this environment. Auth checks cannot run.'
+    };
+  }
+  if (authProfile) {
+    return {
+      icon: '⏳',
+      className: 'unknown',
+      tooltip: 'Auth status not checked yet. Run Test Auth to verify.'
+    };
+  }
+  return {
+    icon: '—',
+    className: 'unknown',
+    tooltip: 'No auth profile assigned.'
+  };
 }
 
 function extractAllowedDomains(rules) {
@@ -754,6 +811,9 @@ function getAuthStatus(profileName) {
 }
 
 function getAuthStatusBadge(status) {
+  if (allowedUrlAuthStatus.playwrightAvailable === false) {
+    return { label: '⚠️ Cannot test', className: 'warning' };
+  }
   if (!status) {
     return { label: '⏳ Not checked yet', className: 'warning' };
   }
@@ -774,6 +834,39 @@ async function loadAuthStatus() {
     authStatusCache = { results: payload.results || {}, updatedAt: new Date().toISOString() };
   } catch (error) {
     authStatusCache = { results: {}, updatedAt: null };
+  }
+}
+
+async function loadAllowedUrlAuthStatus() {
+  try {
+    const response = await fetch(`${API_BASE}/api/admin/allowed-urls/auth-status`);
+    if (!response.ok) {
+      allowedUrlAuthStatus = { byRuleId: {}, byPattern: {}, updatedAt: null, playwrightAvailable: true };
+      return;
+    }
+    const payload = await response.json();
+    const byRuleId = {};
+    const byPattern = {};
+    (payload.rules || []).forEach((entry) => {
+      if (entry.rule_id) {
+        byRuleId[entry.rule_id] = entry;
+      }
+      if (entry.pattern) {
+        byPattern[entry.pattern] = entry;
+      }
+    });
+    allowedUrlAuthStatus = {
+      byRuleId,
+      byPattern,
+      updatedAt: new Date().toISOString(),
+      playwrightAvailable: payload.playwright_available !== false
+    };
+    const warning = document.getElementById('playwrightWarning');
+    if (warning) {
+      warning.style.display = allowedUrlAuthStatus.playwrightAvailable ? 'none' : 'block';
+    }
+  } catch (error) {
+    allowedUrlAuthStatus = { byRuleId: {}, byPattern: {}, updatedAt: null, playwrightAvailable: true };
   }
 }
 
@@ -801,7 +894,9 @@ async function testAuthProfile(profileName, statusEl, buttonEl) {
       results: { ...(authStatusCache.results || {}), ...(payload.results || {}) },
       updatedAt: new Date().toISOString()
     };
+    await loadAllowedUrlAuthStatus();
     renderAuthProfilesList();
+    renderAllowTable();
   } catch (error) {
     if (statusEl) {
       statusEl.textContent = `Auth check failed: ${error.message}`;
@@ -821,7 +916,7 @@ function renderAuthProfilesList() {
 
   const playwright = cachedCrawlerConfig.playwright || {};
   const profiles = playwright.auth_profiles || {};
-  const profileNames = Object.keys(profiles);
+  const profileNames = Object.keys(profiles).filter((name) => name !== 'default');
 
   if (profileNames.length === 0) {
     list.innerHTML = '<div style="padding: 12px; text-align: center; color: var(--text-secondary); font-size: 0.85rem;">No auth profiles configured. Click "+ Add Profile" to create one.</div>';
@@ -851,16 +946,16 @@ function renderAuthProfilesList() {
     pathEl.style.wordBreak = 'break-all';
     pathEl.textContent = `Path: ${profile.storage_state_path || 'Not set'}`;
 
-    const domainsEl = document.createElement('div');
-    domainsEl.style.fontSize = '0.75rem';
-    domainsEl.style.color = 'var(--text-tertiary)';
-    const domains = profile.use_for_domains || [];
-    domainsEl.textContent = domains.length > 0 ? `Domains: ${domains.join(', ')}` : 'No auto-apply domains';
-
     const testUrlEl = document.createElement('div');
     testUrlEl.style.fontSize = '0.75rem';
     testUrlEl.style.color = 'var(--text-tertiary)';
-    testUrlEl.textContent = profile.test_url ? `Test URL: ${profile.test_url}` : 'Test URL: auto';
+    if (profile.test_url) {
+      testUrlEl.textContent = `Test URL: ${profile.test_url}`;
+    } else if (profile.start_url) {
+      testUrlEl.textContent = `Test URL: auto (start URL ${profile.start_url})`;
+    } else {
+      testUrlEl.textContent = 'Test URL: auto (first protected Allowed URL)';
+    }
 
     const statusRow = document.createElement('div');
     statusRow.style.display = 'flex';
@@ -907,7 +1002,7 @@ function renderAuthProfilesList() {
       }
     }
 
-    details.append(nameEl, pathEl, domainsEl, testUrlEl, statusRow);
+    details.append(nameEl, pathEl, testUrlEl, statusRow);
 
     const actions = document.createElement('div');
     actions.className = 'list-actions';
@@ -934,35 +1029,6 @@ function renderAuthProfilesList() {
     list.appendChild(row);
   });
 
-  renderAuthDiagnostics();
-}
-
-function renderAuthDiagnostics() {
-  const diagnosticsEl = document.getElementById('authDiagnostics');
-  if (!diagnosticsEl) return;
-
-  const playwright = cachedCrawlerConfig.playwright || {};
-  const profiles = playwright.auth_profiles || {};
-  const profileNames = Object.keys(profiles);
-
-  if (profileNames.length === 0) {
-    diagnosticsEl.innerHTML = 'No profiles to diagnose.';
-    return;
-  }
-
-  diagnosticsEl.innerHTML = '<div style="font-weight: 600; margin-bottom: 4px;">Storage State Files:</div>';
-
-  profileNames.forEach((name) => {
-    const profile = profiles[name];
-    const path = profile.storage_state_path || '';
-    const row = document.createElement('div');
-    row.style.marginBottom = '2px';
-    const status = getAuthStatus(name);
-    const badgeInfo = getAuthStatusBadge(status);
-    const statusText = status ? badgeInfo.label : '⚠️ Unknown';
-    row.innerHTML = `<span style="font-weight: 500;">${name}:</span> <span style="font-family: monospace; font-size: 0.8rem;">${path}</span> <span style="color: var(--text-tertiary);">(${statusText})</span>`;
-    diagnosticsEl.appendChild(row);
-  });
 }
 
 function showAuthProfileEditor(profileName = null) {
@@ -970,7 +1036,6 @@ function showAuthProfileEditor(profileName = null) {
   const title = document.getElementById('profileEditorTitle');
   const nameInput = document.getElementById('profileName');
   const pathInput = document.getElementById('profileStoragePath');
-  const domainsInput = document.getElementById('profileUseDomains');
   const testUrlInput = document.getElementById('profileTestUrl');
   const status = document.getElementById('profileEditorStatus');
 
@@ -986,7 +1051,6 @@ function showAuthProfileEditor(profileName = null) {
     nameInput.value = profileName;
     nameInput.disabled = true;
     pathInput.value = profile.storage_state_path || '';
-    domainsInput.value = (profile.use_for_domains || []).join('\n');
     testUrlInput.value = profile.test_url || '';
     editState.authProfile = profileName;
   } else {
@@ -994,7 +1058,6 @@ function showAuthProfileEditor(profileName = null) {
     nameInput.value = '';
     nameInput.disabled = false;
     pathInput.value = '';
-    domainsInput.value = '';
     testUrlInput.value = '';
     editState.authProfile = null;
 
@@ -1029,18 +1092,20 @@ function startEditAuthProfile(profileName) {
 async function saveAuthProfile() {
   const nameInput = document.getElementById('profileName');
   const pathInput = document.getElementById('profileStoragePath');
-  const domainsInput = document.getElementById('profileUseDomains');
   const testUrlInput = document.getElementById('profileTestUrl');
   const status = document.getElementById('profileEditorStatus');
 
   const name = nameInput.value.trim();
   const path = pathInput.value.trim();
-  const domainsText = domainsInput.value.trim();
   const testUrl = testUrlInput.value.trim();
-  const domains = domainsText ? domainsText.split('\n').map(d => d.trim()).filter(Boolean) : [];
 
   if (!name) {
     setStatus('profileEditorStatus', 'Profile name is required', 'error');
+    return;
+  }
+
+  if (name === 'default') {
+    setStatus('profileEditorStatus', 'Profile name "default" is reserved. Choose a different name.', 'error');
     return;
   }
 
@@ -1068,13 +1133,13 @@ async function saveAuthProfile() {
   }
 
   cachedCrawlerConfig.playwright.auth_profiles[name] = {
+    ...(cachedCrawlerConfig.playwright.auth_profiles[name] || {}),
     storage_state_path: path,
-    use_for_domains: domains,
     test_url: testUrl || null
   };
 
   // Update authProfiles array
-  authProfiles = Object.keys(cachedCrawlerConfig.playwright.auth_profiles);
+  authProfiles = Object.keys(cachedCrawlerConfig.playwright.auth_profiles).filter((name) => name !== 'default');
 
   // Save to backend immediately
   setStatus('profileEditorStatus', 'Saving...', 'info');
@@ -1083,15 +1148,13 @@ async function saveAuthProfile() {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        enabled: cachedCrawlerConfig.playwright.enabled,
         auth_profiles: cachedCrawlerConfig.playwright.auth_profiles
       })
     });
 
     if (response.ok) {
       hideAuthProfileEditor();
-      renderAuthProfilesList();
-      renderAllowTable();
+      await loadConfigs();
       setStatus('profileEditorStatus', 'Profile saved', 'success');
     } else {
       const error = await response.text();
@@ -1112,7 +1175,7 @@ async function deleteAuthProfile(profileName) {
 
   if (profiles[profileName]) {
     delete profiles[profileName];
-    authProfiles = Object.keys(profiles);
+    authProfiles = Object.keys(profiles).filter((name) => name !== 'default');
 
     // Save to backend immediately
     try {
@@ -1120,14 +1183,12 @@ async function deleteAuthProfile(profileName) {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          enabled: cachedCrawlerConfig.playwright.enabled,
           auth_profiles: cachedCrawlerConfig.playwright.auth_profiles
         })
       });
 
       if (response.ok) {
-        renderAuthProfilesList();
-        renderAllowTable();
+        await loadConfigs();
       } else {
         const error = await response.text();
         alert(`Error deleting profile: ${error}`);
@@ -1154,8 +1215,8 @@ async function migrateLegacyPlaywrightSettings() {
     playwright.auth_profiles = {};
   }
 
-  if (!playwright.auth_profiles.default) {
-    playwright.auth_profiles.default = {
+  if (!playwright.auth_profiles.legacy_migrated) {
+    playwright.auth_profiles.legacy_migrated = {
       storage_state_path: playwright.storage_state_path || '',
       use_for_domains: playwright.use_for_domains || []
     };
@@ -1166,7 +1227,7 @@ async function migrateLegacyPlaywrightSettings() {
   delete playwright.use_for_domains;
 
   cachedCrawlerConfig.playwright = playwright;
-  authProfiles = Object.keys(playwright.auth_profiles);
+  authProfiles = Object.keys(playwright.auth_profiles).filter((name) => name !== 'default');
 
   // Hide migration banner
   const banner = document.getElementById('migrationBanner');
@@ -1176,7 +1237,7 @@ async function migrateLegacyPlaywrightSettings() {
 
   renderAuthProfilesList();
   renderAllowTable();
-  setStatus('saveAuthStatus', 'Legacy settings migrated to "default" profile. Click Save to persist.', 'success');
+  setStatus('saveAuthStatus', 'Legacy settings migrated to "legacy_migrated" profile. Click Save to persist.', 'success');
 }
 
 function checkForLegacySettings() {
@@ -1325,13 +1386,12 @@ async function loadConfigs() {
   const crawler = await fetch(`${API_BASE}/api/admin/config/crawler`).then((r) => r.json());
   cachedCrawlerConfig = crawler || {};
   const playwright = cachedCrawlerConfig.playwright || {};
-  authProfiles = Object.keys(playwright.auth_profiles || {});
-  document.getElementById('playwrightEnabled').checked = Boolean(playwright.enabled);
+  authProfiles = Object.keys(playwright.auth_profiles || {}).filter((name) => name !== 'default');
 
   await loadAuthStatus();
+  await loadAllowedUrlAuthStatus();
   renderAuthProfilesList();
   checkForLegacySettings();
-  await loadAuthHints();
   renderAllowTable();
 
   try {
@@ -1443,19 +1503,6 @@ async function loadRecommendations() {
   }
 }
 
-async function loadAuthHints() {
-  try {
-    const response = await fetch(`${API_BASE}/api/admin/crawl/auth_hints`);
-    if (!response.ok) {
-      authHints = { by_domain: {}, recent: [] };
-      return;
-    }
-    authHints = await response.json();
-  } catch (error) {
-    authHints = { by_domain: {}, recent: [] };
-  }
-}
-
 async function saveCrawlConfig() {
   const allowPayload = {
     seed_urls: crawlState.seeds.map((seed) => {
@@ -1471,52 +1518,49 @@ async function saveCrawlConfig() {
       pattern: rule.pattern,
       match: rule.match || 'prefix',
       types: normalizeTypes(rule.types),
-      playwright: Boolean(rule.playwright),
       allow_http: Boolean(rule.allow_http),
       auth_profile: rule.auth_profile || null
     })),
     allowed_domains: extractAllowedDomains(crawlState.allowRules)
   };
-  const existingPlaywright = cachedCrawlerConfig.playwright || {};
-  const playwrightPayload = {
-    enabled: document.getElementById('playwrightEnabled').checked,
-    auth_profiles: existingPlaywright.auth_profiles || {}
-  };
-
-  // Never write legacy fields (storage_state_path, use_for_domains)
-  // Auth profiles are managed separately via the auth profiles UI
-
-  if (playwrightPayload.headless === undefined) {
-    playwrightPayload.headless = existingPlaywright.headless !== undefined ? existingPlaywright.headless : true;
+  const allowResponse = await fetch(`${API_BASE}/api/admin/config/allow_block`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(allowPayload)
+  });
+  if (allowResponse.ok) {
+    setStatus('saveCrawlStatus', 'Saved');
+    await loadConfigs();
   } else {
-    playwrightPayload.headless = existingPlaywright.headless;
+    setStatus('saveCrawlStatus', 'Error saving config', 'error');
   }
-  if (playwrightPayload.navigation_timeout_ms === undefined) {
-    playwrightPayload.navigation_timeout_ms = existingPlaywright.navigation_timeout_ms || 60000;
-  } else {
-    playwrightPayload.navigation_timeout_ms = existingPlaywright.navigation_timeout_ms;
-  }
+}
+
+async function saveAuthConfig() {
+  setStatus('saveAuthStatus', 'Saving...');
+  const playwright = cachedCrawlerConfig.playwright || {};
   const crawlerPayload = {
     ...cachedCrawlerConfig,
-    playwright: playwrightPayload
+    playwright: {
+      ...playwright,
+      auth_profiles: playwright.auth_profiles || {}
+    }
   };
-  const [allowResponse, crawlerResponse] = await Promise.all([
-    fetch(`${API_BASE}/api/admin/config/allow_block`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(allowPayload)
-    }),
-    fetch(`${API_BASE}/api/admin/config/crawler`, {
+  try {
+    const response = await fetch(`${API_BASE}/api/admin/config/crawler`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(crawlerPayload)
-    })
-  ]);
-  if (allowResponse.ok && crawlerResponse.ok) {
-    cachedCrawlerConfig = crawlerPayload;
-    setStatus('saveCrawlStatus', 'Saved');
-  } else {
-    setStatus('saveCrawlStatus', 'Error saving config', 'error');
+    });
+    if (response.ok) {
+      setStatus('saveAuthStatus', 'Saved');
+      await loadConfigs();
+    } else {
+      const error = await response.text();
+      setStatus('saveAuthStatus', error || 'Error saving auth config', 'error');
+    }
+  } catch (error) {
+    setStatus('saveAuthStatus', `Error: ${error.message}`, 'error');
   }
 }
 
@@ -1581,7 +1625,6 @@ async function addAllowFromInput() {
       pattern: value,
       match: match.value,
       types,
-      playwright: false,
       allow_http: allowHttp,
       auth_profile: null
     };
@@ -1594,9 +1637,7 @@ async function addAllowFromInput() {
     });
 
     if (response.ok) {
-      const savedRule = await response.json();
-      // Add to local state with ID
-      crawlState.allowRules.push(savedRule);
+      await response.json();
 
       // Clear inputs
       input.value = '';
@@ -1612,8 +1653,7 @@ async function addAllowFromInput() {
         }, 2000);
       }
 
-      renderAllowTable();
-      renderRecommendations();
+      await loadConfigs();
     } else {
       const error = await response.text();
       if (statusElement) {
@@ -1783,7 +1823,7 @@ async function loadCrawlSummary(jobId) {
       pillSummary.innerHTML = pillHtml;
       pillSummary.style.display = 'flex';
     }
-    await loadAuthHints();
+    await loadAllowedUrlAuthStatus();
     renderAllowTable();
   } catch (error) {
     summaryPanel.style.display = 'none';
@@ -2667,42 +2707,7 @@ document.getElementById('migrateLegacyBtn')?.addEventListener('click', async () 
   await migrateLegacyPlaywrightSettings();
 });
 
-document.getElementById('saveAuthConfigBtn')?.addEventListener('click', saveCrawlConfig);
-
-// Listen for Playwright enabled toggle and persist immediately
-document.getElementById('playwrightEnabled')?.addEventListener('change', async (event) => {
-  const isEnabled = event.target.checked;
-  cachedCrawlerConfig.playwright = cachedCrawlerConfig.playwright || {};
-  cachedCrawlerConfig.playwright.enabled = isEnabled;
-
-  // Save to backend immediately
-  try {
-    const response = await fetch(`${API_BASE}/api/admin/playwright-settings`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        enabled: isEnabled,
-        auth_profiles: cachedCrawlerConfig.playwright.auth_profiles || {}
-      })
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      alert(`Error saving Playwright setting: ${error}`);
-      // Revert checkbox on error
-      event.target.checked = !isEnabled;
-    }
-  } catch (e) {
-    alert(`Error saving Playwright setting: ${e.message}`);
-    // Revert checkbox on error
-    event.target.checked = !isEnabled;
-  }
-});
-
-document.getElementById('openCaptureInstructions')?.addEventListener('click', (e) => {
-  e.preventDefault();
-  alert('Capture Instructions:\n\n1. Use the tool at tools/wsl/capture_auth_state.py to capture auth state\n2. Run: python tools/wsl/capture_auth_state.py\n3. The tool will guide you through creating/updating auth profiles\n4. Storage state files are saved to secrets/playwright/\n5. Update your auth profile with the new storage state path\n\nSee the README in tools/wsl/ for more details.');
-});
+document.getElementById('saveAuthConfigBtn')?.addEventListener('click', saveAuthConfig);
 
 document.getElementById('jobTable').addEventListener('click', async (event) => {
   const target = event.target;

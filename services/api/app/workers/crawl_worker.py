@@ -4,14 +4,14 @@ import logging
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Set
+from typing import Dict, Iterable, List, Optional, Set
 from urllib.parse import parse_qsl, urljoin, urlparse, urlunparse
 
 import httpx
 import yaml
 
 from app.utils.auth_hints import record_auth_hint
-from app.utils.auth_validation import collect_required_profiles, run_auth_checks
+from app.utils.auth_validation import collect_required_profiles, detect_auth_failure, run_auth_checks
 try:
     import tiktoken  # type: ignore
 except Exception:
@@ -210,7 +210,7 @@ def _match_auth_redirect(target: str) -> str | None:
     return None
 
 
-def _capture_url(url: str, allow_http: bool = False) -> List[str]:
+def _capture_url_http(url: str, allow_http: bool = False) -> List[str]:
     _require_bs4()
     crawler_config = _load_crawler_config()
     ingest_config = _load_config(INGEST_CONFIG_PATH)
@@ -285,6 +285,131 @@ def _capture_url(url: str, allow_http: bool = False) -> List[str]:
     return links
 
 
+def _capture_url_playwright(
+    url: str,
+    allow_http: bool,
+    auth_profile: str,
+    crawler_config: Dict,
+    allow_block: Dict,
+) -> List[str]:
+    _require_bs4()
+    ingest_config = _load_config(INGEST_CONFIG_PATH)
+    url_config = crawler_config.get("url_canonicalization", {})
+    canonical = _canonicalize_url(url, url_config, allow_http)
+    playwright_config = crawler_config.get("playwright", {})
+    profile = (playwright_config.get("auth_profiles", {}) or {}).get(auth_profile)
+    if not profile:
+        raise RuntimeError(f"Auth profile '{auth_profile}' not found")
+
+    storage_state_path = profile.get("storage_state_path")
+    if not storage_state_path:
+        raise RuntimeError(f"Auth profile '{auth_profile}' missing storage_state_path")
+
+    storage_state = Path(storage_state_path)
+    if not storage_state.exists():
+        raise RuntimeError(f"Storage state not found: {storage_state_path}")
+
+    headless = playwright_config.get("headless", True)
+    timeout_ms = playwright_config.get("navigation_timeout_ms", 60000)
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as exc:
+        raise RuntimeError(f"Playwright unavailable: {exc}") from exc
+
+    time.sleep(crawler_config.get("request_delay", 1.0))
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=headless)
+        context = browser.new_context(storage_state=str(storage_state))
+        try:
+            page = context.new_page()
+            response = page.goto(canonical, wait_until="domcontentloaded", timeout=timeout_ms)
+            final_url = page.url
+            title = page.title()
+            content = page.content()
+            status = response.status if response else None
+        finally:
+            context.close()
+            browser.close()
+
+    failure_reason = detect_auth_failure(final_url, title, content)
+    if failure_reason:
+        parsed_target = urlparse(final_url)
+        raise AuthRequiredError(
+            {
+                "original_url": canonical,
+                "redirect_location": final_url,
+                "redirect_host": (parsed_target.hostname or ""),
+                "matched_auth_pattern": failure_reason,
+            }
+        )
+
+    final_host = urlparse(final_url).hostname or ""
+    if final_host and final_host in (allow_block.get("blocked_domains") or []):
+        raise AuthRequiredError(
+            {
+                "original_url": canonical,
+                "redirect_location": final_url,
+                "redirect_host": final_host,
+                "matched_auth_pattern": "blocked_domain_redirect",
+            }
+        )
+
+    soup = BeautifulSoup(content, "html.parser")
+    if not title:
+        if soup.title and soup.title.string:
+            title = soup.title.string.strip()
+        else:
+            h1 = soup.find("h1")
+            if h1:
+                title = h1.get_text(strip=True)
+    text = " ".join(soup.get_text(separator=" ").split())
+    links = []
+    for tag in soup.find_all("a"):
+        href = tag.get("href")
+        if not href:
+            continue
+        links.append(urljoin(final_url, href))
+
+    canonical_final = _canonicalize_url(final_url, url_config, allow_http)
+    doc_id = _doc_id_for_url(canonical_final)
+    content_hash = _content_hash(text)
+    artifact_path = ARTIFACT_DIR / doc_id
+    artifact_path.mkdir(parents=True, exist_ok=True)
+    artifact = {
+        "doc_id": doc_id,
+        "url": canonical_final,
+        "canonical_url": canonical_final,
+        "content_hash": content_hash,
+        "fetched_at": datetime.utcnow().isoformat() + "Z",
+        "title": title,
+        "text": text,
+        "http_status": status,
+        "auth_profile": auth_profile,
+    }
+    (artifact_path / "artifact.json").write_text(
+        json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    chunking = ingest_config.get("chunking", {})
+    chunks = _chunk_text(
+        text,
+        size=chunking.get("chunk_size", 512),
+        overlap=chunking.get("chunk_overlap", 128),
+    )
+    chunks_path = artifact_path / "chunks.jsonl"
+    with chunks_path.open("w", encoding="utf-8") as handle:
+        for index, chunk_text in enumerate(chunks):
+            record = {
+                "chunk_id": f"{doc_id}_{index}",
+                "doc_id": doc_id,
+                "chunk_index": index,
+                "text": chunk_text,
+            }
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    return links
+
+
 def _get_allow_http_for_url(url: str, config: Dict) -> bool:
     """Determine if HTTP is allowed for a given URL based on allow_rules or seed_urls config."""
     # Check seed_urls first
@@ -310,6 +435,28 @@ def _get_allow_http_for_url(url: str, config: Dict) -> bool:
 
     # Default to not allowing HTTP
     return False
+
+
+def _find_allow_rule(url: str, config: Dict) -> Optional[Dict[str, object]]:
+    allow_rules = config.get("allow_rules", [])
+    for rule in allow_rules:
+        if isinstance(rule, dict):
+            pattern = rule.get("pattern", "")
+            match_type = rule.get("match", "prefix")
+            if match_type == "exact" and url == pattern:
+                return rule
+            if match_type != "exact" and pattern and url.startswith(pattern):
+                return rule
+    return None
+
+
+def resolve_fetch_mode(rule: Optional[Dict[str, object]]) -> str:
+    if not rule:
+        return "http"
+    auth_profile = None
+    if isinstance(rule, dict):
+        auth_profile = rule.get("auth_profile") or rule.get("authProfile")
+    return "playwright" if auth_profile else "http"
 
 
 def run_crawl_job(log, job_id: str = None) -> None:
@@ -411,9 +558,24 @@ def run_crawl_job(log, job_id: str = None) -> None:
         log(f"Crawling {url} (depth {depth})")
         metrics["crawled"] += 1
         try:
-            # Determine allow_http flag for this specific URL
+            # Determine allow_http flag and auth profile for this specific URL
             url_allow_http = _get_allow_http_for_url(url, allow_block)
-            links = _capture_url(url, url_allow_http)
+            allow_rule = _find_allow_rule(url, allow_block)
+            fetch_mode = resolve_fetch_mode(allow_rule)
+            auth_profile = None
+            if allow_rule:
+                auth_profile = allow_rule.get("auth_profile") or allow_rule.get("authProfile")
+
+            if fetch_mode == "playwright":
+                links = _capture_url_playwright(
+                    url,
+                    url_allow_http,
+                    auth_profile,
+                    crawler_config,
+                    allow_block,
+                )
+            else:
+                links = _capture_url_http(url, url_allow_http)
             _append_candidates(links, url, depth + 1, max_depth, url_allow_http)
             metrics["captured"] += 1
             metrics["artifacts_written"] += 1

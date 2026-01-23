@@ -76,17 +76,18 @@ def resolve_test_url(profile: Dict, allow_block: Dict, profile_name: str) -> Opt
     test_url = (profile or {}).get("test_url")
     if test_url:
         return test_url
-    use_for_domains = (profile or {}).get("use_for_domains") or []
-    if use_for_domains:
-        target_domain = use_for_domains[0]
-        seed_url = _find_seed_for_domain(allow_block, target_domain)
-        return seed_url or f"https://{target_domain}/"
+    test_urls = (profile or {}).get("test_urls") or []
+    if test_urls:
+        return test_urls[0]
     for rule in allow_block.get("allow_rules", []):
         if isinstance(rule, dict):
             if (rule.get("auth_profile") or rule.get("authProfile")) == profile_name:
                 pattern = rule.get("pattern", "")
                 if pattern:
                     return pattern
+    start_url = (profile or {}).get("start_url")
+    if start_url:
+        return start_url
     return None
 
 
@@ -176,6 +177,7 @@ async def validate_auth_profile(
     profile: Dict,
     crawler_config: Dict,
     allow_block: Dict,
+    test_url_override: Optional[str] = None,
 ) -> AuthCheckResult:
     """
     Validate an auth profile using async Playwright API.
@@ -189,7 +191,7 @@ async def validate_auth_profile(
     checked_at = datetime.utcnow().isoformat() + "Z"
 
     storage_state_path = profile.get("storage_state_path")
-    test_url = resolve_test_url(profile, allow_block, profile_name)
+    test_url = test_url_override or resolve_test_url(profile, allow_block, profile_name)
     if not storage_state_path:
         return AuthCheckResult(
             profile_name=profile_name,
@@ -278,25 +280,18 @@ def collect_required_profiles(crawler_config: Dict, allow_block: Dict) -> Dict[s
     playwright_config = crawler_config.get("playwright", {})
     profiles = playwright_config.get("auth_profiles", {})
     required: Dict[str, Dict] = {}
-    allowed_domains = set()
-    for seed in allow_block.get("seed_urls", []):
-        seed_url = seed.get("url") if isinstance(seed, dict) else seed
-        if seed_url:
-            host = urlparse(seed_url).hostname
-            if host:
-                allowed_domains.add(host.lower())
     for rule in allow_block.get("allow_rules", []):
         if isinstance(rule, dict):
-            pattern = rule.get("pattern", "")
-            if pattern:
-                host = urlparse(pattern).hostname
-                if host:
-                    allowed_domains.add(host.lower())
             profile_name = rule.get("auth_profile") or rule.get("authProfile")
             if profile_name and profile_name in profiles:
                 required[profile_name] = profiles[profile_name]
-    for name, profile in profiles.items():
-        use_for_domains = [domain.lower() for domain in profile.get("use_for_domains", [])]
-        if use_for_domains and allowed_domains.intersection(use_for_domains):
-            required[name] = profile
     return required
+
+
+def playwright_available() -> bool:
+    try:
+        from playwright.async_api import async_playwright  # noqa: F401
+
+        return True
+    except Exception:
+        return False
