@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from qdrant_client import QdrantClient
 
 from app.agents.intent import analyze_intent
-from app.agents.research import summarize_research
+from app.agents.research import summarize_research, aggregate_hits_by_doc
 from app.agents.synthesis import synthesize_answer
 from app.agents.validation import validate_answer
 from app.models.schemas import ResearchOutput, TitleOutput
@@ -240,17 +240,40 @@ async def _stream_chat(conversation_id: str, user_text: str) -> AsyncGenerator[s
         except Exception:
             hits = []
 
+        # Aggregate hits by document and limit to top 6 for synthesis
+        aggregated_docs = aggregate_hits_by_doc(hits)[:6] if hits else []
+
         try:
             research_output = await summarize_research({"hits": hits, "total_results": len(hits)})
+            # Add aggregated docs to research output
+            research_output.docs = [
+                {
+                    "doc_id": doc["doc_id"],
+                    "title": doc["title"],
+                    "url": doc["url"],
+                    "best_score": doc["best_score"],
+                    "total_score": doc["total_score"],
+                    "match_count": doc["match_count"],
+                    "snippet": doc["snippet"]
+                }
+                for doc in aggregated_docs
+            ]
         except Exception:
-            research_output = ResearchOutput(hits=[], total_results=0)
+            research_output = ResearchOutput(hits=[], total_results=0, docs=[])
+
+        # Keep original dedupe for backwards compatibility, but also include aggregated docs
         citations = _dedupe_hits(hits)
 
         yield _format_sse({"type": "status", "stage": "synthesis", "message": "Drafting answer"})
-        synthesis = await synthesize_answer(intent.model_dump(), research_output.model_dump())
+        synthesis = await synthesize_answer(intent.model_dump(), research_output.model_dump(), aggregated_docs)
 
         yield _format_sse({"type": "status", "stage": "validation", "message": "Verifying response"})
-        validation = await validate_answer(user_text, synthesis.draft_answer, research_output.model_dump())
+        validation = await validate_answer(
+            user_text,
+            synthesis.draft_answer,
+            research_output.model_dump(),
+            intent.context
+        )
 
         if validation.needs_clarification and validation.clarifying_question:
             yield _format_sse({"type": "token", "text": validation.clarifying_question})
@@ -258,6 +281,7 @@ async def _stream_chat(conversation_id: str, user_text: str) -> AsyncGenerator[s
             assistant_content = {
                 "text": validation.clarifying_question,
                 "citations": citations,
+                "sources": aggregated_docs,  # Add aggregated docs for frontend
                 "pipeline": {
                     "intent": intent.model_dump(),
                     "research": research_output.model_dump(),
@@ -278,6 +302,7 @@ async def _stream_chat(conversation_id: str, user_text: str) -> AsyncGenerator[s
         assistant_content = {
             "text": final_answer,
             "citations": citations,
+            "sources": aggregated_docs,  # Add aggregated docs for frontend
             "pipeline": {
                 "intent": intent.model_dump(),
                 "research": research_output.model_dump(),
