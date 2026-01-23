@@ -28,6 +28,14 @@ def _connect() -> sqlite3.Connection:
 
 
 def _init_db(conn: sqlite3.Connection) -> None:
+    """Initialize the ingest metadata database schema.
+
+    Creates tables and indexes if they don't exist. Safe to call multiple times (idempotent).
+    """
+    # Enable WAL mode for better concurrent access
+    conn.execute("PRAGMA journal_mode=WAL;")
+
+    # Create documents table
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS documents (
@@ -39,6 +47,8 @@ def _init_db(conn: sqlite3.Connection) -> None:
         );
         """
     )
+
+    # Create chunks table
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS chunks (
@@ -50,6 +60,25 @@ def _init_db(conn: sqlite3.Connection) -> None:
         );
         """
     )
+
+    # Create indexes for better query performance
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_url ON documents(url);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON chunks(doc_id);")
+
+    # Set schema version for tracking
+    conn.execute("PRAGMA user_version = 1;")
+
+    # Commit changes
+    conn.commit()
+
+
+def ensure_metadata_db_initialized() -> None:
+    """Ensure the ingest metadata database is initialized.
+
+    Safe to call multiple times (idempotent).
+    """
+    with _connect() as conn:
+        _init_db(conn)
 
 
 def _ensure_collection(client: QdrantClient, collection: str, vector_size: int) -> None:

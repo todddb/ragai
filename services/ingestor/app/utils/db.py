@@ -12,7 +12,15 @@ def connect() -> sqlite3.Connection:
 
 
 def init_db() -> None:
+    """Initialize the ingest metadata database schema.
+
+    Creates tables and indexes if they don't exist. Safe to call multiple times (idempotent).
+    """
     with connect() as conn:
+        # Enable WAL mode for better concurrent access
+        conn.execute("PRAGMA journal_mode=WAL;")
+
+        # Create documents table
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS documents (
@@ -24,6 +32,8 @@ def init_db() -> None:
             );
             """
         )
+
+        # Create chunks table
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS chunks (
@@ -35,3 +45,13 @@ def init_db() -> None:
             );
             """
         )
+
+        # Create indexes for better query performance
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_url ON documents(url);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON chunks(doc_id);")
+
+        # Set schema version for tracking
+        conn.execute("PRAGMA user_version = 1;")
+
+        # Commit changes
+        conn.commit()

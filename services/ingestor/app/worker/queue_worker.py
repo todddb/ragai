@@ -16,7 +16,7 @@ from qdrant_client import QdrantClient
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from app.utils.db import connect
+from app.utils.db import connect, init_db
 from app.utils.ollama_embed import embed_text, embed_texts_async
 from app.utils.qdrant import delete_by_doc_id, ensure_collection, upsert_vectors
 
@@ -137,6 +137,10 @@ async def process_job(redis: aioredis.Redis, job: dict):
         client = QdrantClient(url=qdrant_host)
         vector_size = len(embed_text(ollama_host, embedding_model, "dimension probe"))
         ensure_collection(client, collection, vector_size=vector_size)
+
+        # Ensure ingest metadata database schema is initialized
+        init_db()
+        await publish_log(redis, job_id, "Initialized ingest metadata schema")
 
         # Connect to SQLite database
         with connect() as conn:
