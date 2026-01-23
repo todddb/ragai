@@ -379,6 +379,78 @@
           </div>
 
           <div id="data" class="tab-content" style="display:none;">
+            <!-- Pipeline Health -->
+            <div class="panel-card" id="pipelineHealthPanel">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <h4 style="margin: 0;">Pipeline Health</h4>
+                <button class="btn btn-small" id="refreshHealthBtn">Refresh Health</button>
+              </div>
+              <div id="pipelineHealthStatus" class="status-text" style="margin-bottom: 12px;"></div>
+              <div id="pipelineHealthGrid" class="card-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;">
+                <!-- Health cards will be rendered here -->
+              </div>
+            </div>
+
+            <!-- Check Data -->
+            <div class="panel-card" id="checkDataPanel">
+              <h4>Check Data</h4>
+              <p class="settings-help">
+                Diagnostic tools to check specific URLs or search across artifacts and vector index.
+              </p>
+
+              <!-- Check by URL -->
+              <div style="margin-bottom: 24px;">
+                <h5 style="margin-bottom: 8px;">Check by URL</h5>
+                <div class="actions-row" style="margin-bottom: 12px;">
+                  <input type="text" id="checkUrlInput" placeholder="Enter full URL (e.g., https://example.com/page)" style="flex: 1; min-width: 300px;" />
+                  <button class="btn btn-primary" id="checkUrlBtn">Check URL</button>
+                </div>
+                <div id="checkUrlStatus" class="status-text" style="margin-bottom: 8px;"></div>
+                <div id="checkUrlResults" style="display: none;">
+                  <div class="info-grid" style="grid-template-columns: 1fr;">
+                    <div>
+                      <div class="field-label">Artifact Status</div>
+                      <div id="checkUrlArtifact" class="info-value"></div>
+                    </div>
+                    <div>
+                      <div class="field-label">Validation Status</div>
+                      <div id="checkUrlValidation" class="info-value"></div>
+                    </div>
+                    <div>
+                      <div class="field-label">Ingest Status</div>
+                      <div id="checkUrlIngest" class="info-value"></div>
+                    </div>
+                    <div>
+                      <div class="field-label">Qdrant Status</div>
+                      <div id="checkUrlQdrant" class="info-value"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Search check -->
+              <div>
+                <h5 style="margin-bottom: 8px;">Search Data</h5>
+                <div class="actions-row" style="margin-bottom: 12px;">
+                  <input type="text" id="searchDataInput" placeholder="Enter search term (e.g., gift, policy, error)" style="flex: 1; min-width: 300px;" />
+                  <button class="btn btn-primary" id="searchDataBtn">Search</button>
+                </div>
+                <div id="searchDataStatus" class="status-text" style="margin-bottom: 8px;"></div>
+                <div id="searchDataResults" style="display: none;">
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                    <div>
+                      <h6 style="margin-bottom: 8px;">Artifact Matches</h6>
+                      <div id="searchArtifactResults" class="validation-list" style="max-height: 400px; overflow-y: auto;"></div>
+                    </div>
+                    <div>
+                      <h6 style="margin-bottom: 8px;">Qdrant Semantic Matches</h6>
+                      <div id="searchQdrantResults" class="validation-list" style="max-height: 400px; overflow-y: auto;"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div class="panel-card" id="dataValidationPanel">
               <h4>Validate Crawl Artifacts</h4>
               <p class="settings-help">

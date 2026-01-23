@@ -920,6 +920,385 @@ async def remove_job(job_id: str) -> Dict[str, str]:
     return {"status": "ok"}
 
 
+@router.get("/data/health")
+async def get_data_health() -> Dict[str, Any]:
+    """Get comprehensive health status for all data pipeline components."""
+    import glob
+    import sqlite3
+    from app.utils.config import load_config
+
+    health = {}
+
+    # Artifacts status
+    artifacts_path = Path("/app/data/artifacts")
+    quarantine_path = Path("/app/data/quarantine")
+    artifacts_count = 0
+    quarantined_count = 0
+    last_captured_at = None
+
+    if artifacts_path.exists():
+        artifact_dirs = list(artifacts_path.glob("*/artifact.json"))
+        artifacts_count = len(artifact_dirs)
+
+        # Find most recent artifact
+        if artifact_dirs:
+            latest_artifact = max(artifact_dirs, key=lambda p: p.stat().st_mtime)
+            last_captured_at = datetime.fromtimestamp(
+                latest_artifact.stat().st_mtime, tz=timezone.utc
+            ).isoformat()
+
+    if quarantine_path.exists():
+        quarantined_count = len(list(quarantine_path.glob("*")))
+
+    health["artifacts"] = {
+        "count": artifacts_count,
+        "quarantined": quarantined_count,
+        "last_captured_at": last_captured_at,
+    }
+
+    # Crawl job status
+    jobs = list_jobs()
+    crawl_jobs = [j for j in jobs.values() if j.job_type == "crawl"]
+    last_crawl_job = None
+
+    if crawl_jobs:
+        latest_crawl = max(crawl_jobs, key=lambda j: j.started_at or "")
+        last_crawl_job = {
+            "id": latest_crawl.job_id,
+            "status": latest_crawl.status,
+            "finished_at": latest_crawl.finished_at,
+            "started_at": latest_crawl.started_at,
+        }
+
+    health["crawl"] = {"last_job": last_crawl_job}
+
+    # Ingest worker and job status
+    try:
+        from app.routes.ingest_jobs import get_worker_status
+        worker_status = await get_worker_status()
+        health["ingest"] = {
+            "worker": worker_status,
+            "last_job": None,
+        }
+    except Exception:
+        health["ingest"] = {
+            "worker": {"status": "unknown", "details": {}},
+            "last_job": None,
+        }
+
+    ingest_jobs = [j for j in jobs.values() if j.job_type == "ingest"]
+    if ingest_jobs:
+        latest_ingest = max(ingest_jobs, key=lambda j: j.started_at or "")
+        health["ingest"]["last_job"] = {
+            "id": latest_ingest.job_id,
+            "status": latest_ingest.status,
+            "finished_at": latest_ingest.finished_at,
+            "started_at": latest_ingest.started_at,
+        }
+
+    # Qdrant status
+    try:
+        system_config = load_config("system")
+        qdrant_config = system_config.get("qdrant", {})
+        qdrant_host = qdrant_config.get("host")
+        collection_name = qdrant_config.get("collection", "ragai_chunks")
+
+        client = QdrantClient(url=qdrant_host)
+        collections_info = []
+
+        try:
+            collection_info = client.get_collection(collection_name)
+            collections_info.append({
+                "name": collection_name,
+                "points": collection_info.points_count or 0,
+            })
+        except Exception:
+            collections_info.append({
+                "name": collection_name,
+                "points": 0,
+            })
+
+        health["qdrant"] = {"collections": collections_info}
+    except Exception as e:
+        health["qdrant"] = {"collections": [], "error": str(e)}
+
+    # System health
+    try:
+        from app.routes.health import check_health
+        api_health = await check_health()
+        health["system"] = {"api_health": "ok" if api_health.get("status") == "ok" else "degraded"}
+    except Exception:
+        health["system"] = {"api_health": "unknown"}
+
+    return health
+
+
+@router.post("/data/check_url")
+async def check_url(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Check a specific URL across artifacts, validation, ingest, and Qdrant."""
+    import sqlite3
+    from app.utils.config import load_config
+
+    url = payload.get("url")
+    if not url:
+        raise HTTPException(status_code=400, detail="Missing 'url' field")
+
+    result = {
+        "url": url,
+        "artifact": None,
+        "validation": None,
+        "ingest": None,
+        "qdrant": None,
+    }
+
+    # Check artifacts
+    artifacts_path = Path("/app/data/artifacts")
+    if artifacts_path.exists():
+        found_artifacts = []
+
+        # Scan all artifact.json files
+        for artifact_file in artifacts_path.glob("*/artifact.json"):
+            try:
+                artifact_data = json.loads(artifact_file.read_text(encoding="utf-8"))
+                artifact_url = artifact_data.get("url", "")
+
+                if artifact_url == url or artifact_data.get("final_url") == url:
+                    artifact_dir = artifact_file.parent
+
+                    # Read content snippet
+                    content_file = artifact_dir / "content.html"
+                    snippet = ""
+                    if content_file.exists():
+                        content_text = content_file.read_text(encoding="utf-8")
+                        snippet = content_text[:500] + ("..." if len(content_text) > 500 else "")
+
+                    found_artifacts.append({
+                        "artifact_id": artifact_dir.name,
+                        "url": artifact_data.get("url"),
+                        "final_url": artifact_data.get("final_url"),
+                        "status_code": artifact_data.get("status_code"),
+                        "title": artifact_data.get("title"),
+                        "captured_at": artifact_data.get("timestamp"),
+                        "snippet": snippet,
+                    })
+            except Exception:
+                continue
+
+        if found_artifacts:
+            # Sort by captured_at, most recent first
+            found_artifacts.sort(key=lambda a: a.get("captured_at", ""), reverse=True)
+            result["artifact"] = {
+                "found": True,
+                "count": len(found_artifacts),
+                "most_recent": found_artifacts[0] if found_artifacts else None,
+                "all": found_artifacts,
+            }
+        else:
+            result["artifact"] = {"found": False}
+
+    # Check validation findings
+    latest_validation = _latest_summary("validate_crawl_")
+    if latest_validation and latest_validation.exists():
+        try:
+            validation_data = json.loads(latest_validation.read_text(encoding="utf-8"))
+            findings = validation_data.get("findings", [])
+            url_findings = [f for f in findings if f.get("url") == url]
+
+            if url_findings:
+                result["validation"] = {
+                    "found": True,
+                    "findings": url_findings,
+                }
+            else:
+                result["validation"] = {"found": False}
+        except Exception:
+            result["validation"] = {"found": False, "error": "Could not read validation data"}
+    else:
+        result["validation"] = {"found": False, "error": "No validation summary available"}
+
+    # Check ingest status
+    if DB_PATH.exists():
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+
+            # Find document by URL
+            cursor.execute("SELECT doc_id, url, ingested_at FROM documents WHERE url = ?", (url,))
+            doc_row = cursor.fetchone()
+
+            if doc_row:
+                doc_id, doc_url, ingested_at = doc_row
+
+                # Count chunks for this document
+                cursor.execute("SELECT COUNT(*) FROM chunks WHERE doc_id = ?", (doc_id,))
+                chunk_count = cursor.fetchone()[0]
+
+                result["ingest"] = {
+                    "found": True,
+                    "doc_id": doc_id,
+                    "url": doc_url,
+                    "chunk_count": chunk_count,
+                    "ingested_at": ingested_at,
+                }
+            else:
+                result["ingest"] = {"found": False}
+
+            conn.close()
+        except Exception as e:
+            result["ingest"] = {"found": False, "error": str(e)}
+    else:
+        result["ingest"] = {"found": False, "error": "metadata.db not found"}
+
+    # Check Qdrant
+    try:
+        system_config = load_config("system")
+        qdrant_config = system_config.get("qdrant", {})
+        qdrant_host = qdrant_config.get("host")
+        collection_name = qdrant_config.get("collection", "ragai_chunks")
+
+        client = QdrantClient(url=qdrant_host)
+
+        # Search by URL in payload
+        search_result = client.scroll(
+            collection_name=collection_name,
+            scroll_filter=rest.Filter(
+                must=[
+                    rest.FieldCondition(
+                        key="url",
+                        match=rest.MatchValue(value=url),
+                    )
+                ]
+            ),
+            limit=10,
+        )
+
+        points = search_result[0] if search_result else []
+
+        if points:
+            # Extract chunk snippets
+            chunks = []
+            for point in points[:3]:  # Limit to 3 examples
+                payload_data = point.payload or {}
+                chunks.append({
+                    "chunk_id": point.id,
+                    "text": payload_data.get("text", "")[:200],
+                    "doc_id": payload_data.get("doc_id"),
+                })
+
+            result["qdrant"] = {
+                "found": True,
+                "points_count": len(points),
+                "example_chunks": chunks,
+            }
+        else:
+            result["qdrant"] = {"found": False}
+    except Exception as e:
+        result["qdrant"] = {"found": False, "error": str(e)}
+
+    return result
+
+
+@router.post("/data/search")
+async def search_data(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Search for keywords across artifacts and Qdrant."""
+    import sqlite3
+    from app.utils.config import load_config
+
+    query = payload.get("query")
+    limit = payload.get("limit", 10)
+    scope = payload.get("scope", "all")
+
+    if not query:
+        raise HTTPException(status_code=400, detail="Missing 'query' field")
+
+    result = {
+        "query": query,
+        "artifacts": [],
+        "qdrant": [],
+    }
+
+    # Search artifacts (keyword search)
+    if scope in ("all", "artifacts"):
+        artifacts_path = Path("/app/data/artifacts")
+        if artifacts_path.exists():
+            matches = []
+            query_lower = query.lower()
+
+            for artifact_file in artifacts_path.glob("*/artifact.json"):
+                try:
+                    artifact_dir = artifact_file.parent
+                    artifact_data = json.loads(artifact_file.read_text(encoding="utf-8"))
+
+                    # Check content
+                    content_file = artifact_dir / "content.html"
+                    if content_file.exists():
+                        content_text = content_file.read_text(encoding="utf-8")
+
+                        if query_lower in content_text.lower():
+                            # Extract snippet around first match
+                            match_index = content_text.lower().find(query_lower)
+                            start = max(0, match_index - 100)
+                            end = min(len(content_text), match_index + 100)
+                            snippet = content_text[start:end]
+
+                            matches.append({
+                                "artifact_id": artifact_dir.name,
+                                "url": artifact_data.get("url"),
+                                "title": artifact_data.get("title"),
+                                "snippet": snippet,
+                                "match_index": match_index,
+                            })
+
+                            if len(matches) >= limit:
+                                break
+                except Exception:
+                    continue
+
+            result["artifacts"] = matches
+
+    # Search Qdrant (semantic search)
+    if scope in ("all", "qdrant"):
+        try:
+            system_config = load_config("system")
+            qdrant_config = system_config.get("qdrant", {})
+            ollama_config = system_config.get("ollama", {})
+            qdrant_host = qdrant_config.get("host")
+            collection_name = qdrant_config.get("collection", "ragai_chunks")
+            ollama_host = ollama_config.get("host")
+            embedding_model = ollama_config.get("embedding_model")
+
+            if ollama_host and embedding_model:
+                # Generate embedding for query
+                query_vector = embed_text(ollama_host, embedding_model, query)
+
+                # Search Qdrant
+                client = QdrantClient(url=qdrant_host)
+                search_results = client.search(
+                    collection_name=collection_name,
+                    query_vector=query_vector,
+                    limit=limit,
+                )
+
+                qdrant_matches = []
+                for hit in search_results:
+                    payload_data = hit.payload or {}
+                    qdrant_matches.append({
+                        "chunk_id": hit.id,
+                        "score": hit.score,
+                        "text": payload_data.get("text", "")[:200],
+                        "url": payload_data.get("url"),
+                        "doc_id": payload_data.get("doc_id"),
+                    })
+
+                result["qdrant"] = qdrant_matches
+            else:
+                result["qdrant"] = {"error": "Embedding configuration not available"}
+        except Exception as e:
+            result["qdrant"] = {"error": str(e)}
+
+    return result
+
+
 @router.post("/clear_vectors")
 async def clear_vectors() -> Dict[str, Any]:
     system_config = yaml.safe_load((CONFIG_DIR / "system.yml").read_text(encoding="utf-8")) or {}
