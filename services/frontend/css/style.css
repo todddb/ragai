@@ -800,11 +800,20 @@ html.sidebar-collapsed .sidebar #sidebarToggle {
 }
 
 .footer {
-  text-align: center;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   color: var(--text-secondary);
   font-size: 0.875rem;
   padding: var(--spacing-lg);
   margin-top: auto;
+}
+
+.build-version {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  font-family: 'Courier New', monospace;
+  opacity: 0.7;
 }
 
 .link {
