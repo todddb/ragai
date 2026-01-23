@@ -220,6 +220,11 @@ body.page-chat .chat-layout {
   font-size: 0.75rem;
   font-weight: 600;
   margin-top: var(--spacing-xs);
+  flex-shrink: 0;
+}
+
+.message .user-avatar {
+  background: #111827;
 }
 
 .message-content {
@@ -444,6 +449,9 @@ body.page-chat .chat-layout {
   border-radius: var(--radius-md);
   border: 1px solid var(--border-light);
   resize: vertical;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  font-size: 15px;
+  line-height: 1.4;
 }
 
 .sidebar {

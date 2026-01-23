@@ -18,7 +18,15 @@ if (window.marked) {
 
 function formatTimestamp(timestamp) {
   const date = timestamp ? new Date(timestamp) : new Date();
-  return date.toLocaleString();
+  try {
+    const t = dayjs(date);
+    const relative = t.fromNow();
+    const fullTime = t.format('YYYY-MM-DD HH:mm:ss');
+    const displayTime = t.format('MM-DD-YYYY hh:mm A');
+    return `<span class="message-timestamp" title="${fullTime}">${relative} (${displayTime})</span>`;
+  } catch (e) {
+    return `<span class="message-timestamp">${date.toLocaleString()}</span>`;
+  }
 }
 
 function escapeHtml(value) {
@@ -235,12 +243,11 @@ function addMessage(role, text, timestamp, content = null) {
   let statusLine = null;
   let contentNode = null;
 
-  if (role === 'assistant') {
-    const avatar = document.createElement('div');
-    avatar.className = 'avatar';
-    avatar.textContent = 'AI';
-    message.appendChild(avatar);
-  }
+  // Add avatar for both user and assistant messages
+  const avatar = document.createElement('div');
+  avatar.className = role === 'assistant' ? 'avatar ai-avatar' : 'avatar user-avatar';
+  avatar.textContent = role === 'assistant' ? 'AI' : 'USER';
+  message.appendChild(avatar);
 
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble';
@@ -260,7 +267,7 @@ function addMessage(role, text, timestamp, content = null) {
 
   const meta = document.createElement('div');
   meta.className = 'message-meta';
-  meta.textContent = formatTimestamp(timestamp);
+  meta.innerHTML = formatTimestamp(timestamp);
 
   const wrapper = document.createElement('div');
   wrapper.className = 'message-content';
@@ -602,16 +609,16 @@ const messageInput = document.getElementById('messageInput');
 
 sendButton.addEventListener('click', sendMessage);
 messageInput.addEventListener('keydown', (event) => {
-  if (event.key !== 'Enter' || event.shiftKey) {
-    return;
-  }
-  const value = messageInput.value;
-  const cursorAtEnd =
-    messageInput.selectionStart === value.length && messageInput.selectionEnd === value.length;
-  if (cursorAtEnd && value.endsWith('\n')) {
+  if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault();
+    const text = messageInput.value.trim();
+    if (text === '') {
+      messageInput.value = '';
+      return;
+    }
     sendMessage();
   }
+  // Shift+Enter allows newline (default browser behavior)
 });
 
 checkApiHealth();
@@ -620,9 +627,8 @@ const params = new URLSearchParams(window.location.search);
 const requestedConversation = params.get('conversation_id');
 if (requestedConversation) {
   loadConversation(requestedConversation, { updateUrl: false });
-} else {
-  startNewConversation();
 }
+// Don't create a conversation on page load - only when user sends first message
 
 window.loadConversation = loadConversation;
 window.startNewConversation = startNewConversation;
