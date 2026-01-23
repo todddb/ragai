@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class IntentOutput(BaseModel):
@@ -26,7 +26,7 @@ class ResearchOutput(BaseModel):
 
 class SynthesisOutput(BaseModel):
     draft_answer: str
-    citations_used: List[str]
+    citations_used: List[str] = Field(default_factory=list)
 
 
 class ValidationOutput(BaseModel):

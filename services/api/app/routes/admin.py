@@ -5,7 +5,7 @@ import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, List
+from typing import Any, AsyncGenerator, Dict, List, Optional
 from urllib.parse import urlparse
 
 import yaml
@@ -47,12 +47,28 @@ def _run_validation(command: List[str]) -> None:
         )
 
 
-def _latest_summary(prefix: str) -> Path:
+def _latest_summary(prefix: str) -> Optional[Path]:
+    """
+    Return the newest summary JSON file matching prefix, or None if unavailable.
+    """
     if not SUMMARY_DIR.exists():
-        return Path()
-    summaries = sorted(SUMMARY_DIR.glob(f"{prefix}*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-    return summaries[0] if summaries else Path()
+        return None
 
+    summaries = sorted(
+        SUMMARY_DIR.glob(f"{prefix}*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+    if not summaries:
+        return None
+
+    # Extra safety: ensure we only return files
+    for p in summaries:
+        if p.is_file():
+            return p
+
+    return None
 
 def _format_crawl_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
     findings = payload.get("findings", [])
@@ -585,29 +601,30 @@ async def reset_all() -> Dict[str, Any]:
 async def validate_crawl() -> Dict[str, Any]:
     """Run crawl artifact validation and return summary."""
     SUMMARY_DIR.mkdir(parents=True, exist_ok=True)
-    summary_path = SUMMARY_DIR / "validate_crawl_latest.json"
-    _run_validation(
-        [
-            "python",
-            "/app/tools/validate_crawl",
-            "--all",
-            "--json-out",
-            str(summary_path),
-        ]
-    )
-    if not summary_path.exists():
-        raise HTTPException(status_code=500, detail="Crawl validation summary not found")
+    summary_path = SUMMARY_DIR / "validate_ingest_latest.json"
+    if not summary_path.is_file():
+        latest = _latest_summary("validate_ingest_")
+        if not latest or not latest.is_file():
+            raise HTTPException(status_code=404, detail="No ingest validation summary available")
+        summary_path = latest
+
     payload = json.loads(summary_path.read_text(encoding="utf-8"))
-    return _format_crawl_summary(payload)
+    return _format_ingest_summary(payload)
 
 
 @router.get("/validate/crawl/summary")
 async def get_crawl_summary() -> Dict[str, Any]:
     summary_path = SUMMARY_DIR / "validate_crawl_latest.json"
-    if not summary_path.exists():
-        summary_path = _latest_summary("validate_crawl_")
-    if not summary_path.exists():
-        raise HTTPException(status_code=404, detail="No crawl validation summary available")
+
+    if not summary_path.is_file():
+        latest = _latest_summary("validate_crawl_")
+        if not latest or not latest.is_file():
+            raise HTTPException(
+                status_code=404,
+                detail="No crawl validation summary available"
+            )
+        summary_path = latest
+
     payload = json.loads(summary_path.read_text(encoding="utf-8"))
     return _format_crawl_summary(payload)
 

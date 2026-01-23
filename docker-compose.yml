@@ -51,6 +51,7 @@ services:
       - OLLAMA_HOST=http://ollama:11434
       - QDRANT_HOST=http://qdrant:6333
       - REDIS_HOST=redis://redis:6379/0
+      - OLLAMA_MODEL=qwen2.5:latest
     depends_on:
       - ollama
       - qdrant
