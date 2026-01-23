@@ -15,6 +15,14 @@ def _load_yaml(path: Path) -> Dict[str, Any]:
         return yaml.safe_load(handle) or {}
 
 
+def write_yaml_config(path: Path, payload: Dict[str, Any]) -> None:
+    try:
+        yaml.safe_dump(payload)
+    except yaml.YAMLError as exc:
+        raise ValueError(str(exc)) from exc
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+
 def load_config(name: str) -> Dict[str, Any]:
     if name not in _cache:
         _cache[name] = _load_yaml(CONFIG_DIR / f"{name}.yml")

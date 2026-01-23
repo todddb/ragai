@@ -98,11 +98,29 @@ class AuthValidationTests(unittest.TestCase):
         self.assertIsNone(reason)
 
     def test_resolves_test_url_from_seed(self) -> None:
-        """Test that test URL is properly resolved from seed URLs"""
-        profile = {"use_for_domains": ["policy.byu.edu"]}
-        allow_block = {"seed_urls": [{"url": "https://policy.byu.edu/view/"}]}
+        """Test that test URL is properly resolved from allow rules"""
+        profile = {}
+        allow_block = {
+            "allow_rules": [
+                {"pattern": "https://policy.byu.edu/view/", "auth_profile": "policy_cas"}
+            ]
+        }
         resolved = resolve_test_url(profile, allow_block, "policy_cas")
         self.assertEqual(resolved, "https://policy.byu.edu/view/")
+
+    def test_resolves_test_url_from_profile_test_url(self) -> None:
+        """Test that explicit test_url takes precedence"""
+        profile = {"test_url": "https://policy.byu.edu/protected"}
+        allow_block = {"allow_rules": []}
+        resolved = resolve_test_url(profile, allow_block, "policy_cas")
+        self.assertEqual(resolved, "https://policy.byu.edu/protected")
+
+    def test_resolves_test_url_from_start_url(self) -> None:
+        """Test that start_url is used when no allow rule matches"""
+        profile = {"start_url": "https://policy.byu.edu/"}
+        allow_block = {"allow_rules": []}
+        resolved = resolve_test_url(profile, allow_block, "policy_cas")
+        self.assertEqual(resolved, "https://policy.byu.edu/")
 
 
 if __name__ == "__main__":

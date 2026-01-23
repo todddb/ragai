@@ -14,7 +14,11 @@ from fastapi.responses import FileResponse, StreamingResponse
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as rest
 
-from app.utils.config import refresh_config
+from app.utils.auth_validation import (
+    playwright_available,
+    validate_auth_profile,
+)
+from app.utils.config import refresh_config, write_yaml_config
 from app.utils.jobs import delete_job, get_job, list_jobs, start_job
 from app.utils.ollama_embed import embed_text
 from app.workers.ingest_worker import DB_PATH, run_ingest_job
@@ -29,6 +33,8 @@ AUTH_HINTS_PATH = Path("/app/data/logs/auth_hints.json")
 SUMMARY_DIR = Path("/app/data/logs/summaries")
 QUARANTINE_DIR = Path("/app/data/quarantine")
 QUARANTINE_AUDIT_LOG = Path("/app/data/logs/quarantine_audit.log")
+ALLOWED_URL_STATUS_TTL_SECONDS = 60
+_ALLOWED_URL_STATUS_CACHE: Dict[str, Any] = {"timestamp": 0.0, "payload": None}
 
 
 def _utcnow() -> str:
@@ -118,6 +124,33 @@ def _format_ingest_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _rule_matches_url(pattern: str, match_type: str, url: str) -> bool:
+    if match_type == "exact":
+        return pattern == url
+    return url.startswith(pattern)
+
+
+def _get_auth_hint_for_rule(rule: Dict[str, Any], hints: Dict[str, Any]) -> bool:
+    pattern = rule.get("pattern", "")
+    match_type = rule.get("match", "prefix")
+    if not pattern:
+        return False
+    for entry in hints.get("recent", []) or []:
+        original_url = entry.get("original_url") or ""
+        if original_url and _rule_matches_url(pattern, match_type, original_url):
+            return True
+    host = ""
+    try:
+        host = urlparse(pattern).hostname or ""
+    except Exception:
+        host = ""
+    return bool(host and hints.get("by_domain", {}).get(host))
+
+
+def _allowed_url_status_cache_fresh() -> bool:
+    return (datetime.now(timezone.utc).timestamp() - float(_ALLOWED_URL_STATUS_CACHE.get("timestamp", 0.0))) < ALLOWED_URL_STATUS_TTL_SECONDS
+
+
 def _parse_redis_host_port() -> Dict[str, Any]:
     redis_url = os.getenv("REDIS_HOST", "redis://redis:6379/0")
     if redis_url.startswith("redis://"):
@@ -150,17 +183,27 @@ async def get_config(name: str) -> Dict[str, Any]:
     path = CONFIG_DIR / f"{name}.yml"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Config not found")
-    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if name == "allow_block" and "allow_rules" in config:
+        updated = False
+        for rule in config.get("allow_rules", []):
+            if isinstance(rule, dict):
+                if not rule.get("id"):
+                    _ensure_rule_id(rule)
+                    updated = True
+        if updated:
+            write_yaml_config(path, config)
+            refresh_config("allow_block")
+    return config
 
 
 @router.put("/config/{name}")
 async def update_config(name: str, payload: Dict[str, Any]) -> Dict[str, str]:
     path = CONFIG_DIR / f"{name}.yml"
     try:
-        yaml.safe_dump(payload)
-    except yaml.YAMLError as exc:
+        write_yaml_config(path, payload)
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     refresh_config(name)
     return {"status": "ok"}
 
@@ -205,10 +248,10 @@ async def create_allowed_url(payload: Dict[str, Any]) -> Dict[str, Any]:
             "xlsx": False,
             "pptx": False,
         }),
-        "playwright": payload.get("playwright", False),
         "allow_http": payload.get("allow_http", False),
         "auth_profile": payload.get("auth_profile"),
     }
+    rule["playwright"] = bool(rule.get("auth_profile"))
 
     # Validate match type
     if rule["match"] not in ["prefix", "exact"]:
@@ -269,10 +312,10 @@ async def update_allowed_url(rule_id: str, payload: Dict[str, Any]) -> Dict[str,
         "pattern": payload.get("pattern", config["allow_rules"][rule_index].get("pattern")),
         "match": payload.get("match", config["allow_rules"][rule_index].get("match", "prefix")),
         "types": payload.get("types", config["allow_rules"][rule_index].get("types", {})),
-        "playwright": payload.get("playwright", config["allow_rules"][rule_index].get("playwright", False)),
         "allow_http": payload.get("allow_http", config["allow_rules"][rule_index].get("allow_http", False)),
         "auth_profile": payload.get("auth_profile", config["allow_rules"][rule_index].get("auth_profile")),
     }
+    updated_rule["playwright"] = bool(updated_rule.get("auth_profile"))
 
     # Validate match type
     if updated_rule["match"] not in ["prefix", "exact"]:
@@ -355,6 +398,109 @@ async def update_playwright_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     refresh_config("crawler")
 
     return config["playwright"]
+
+
+@router.get("/allowed-urls/auth-status")
+async def allowed_urls_auth_status() -> Dict[str, Any]:
+    if _allowed_url_status_cache_fresh() and _ALLOWED_URL_STATUS_CACHE.get("payload"):
+        return _ALLOWED_URL_STATUS_CACHE["payload"]
+
+    allow_block = yaml.safe_load((CONFIG_DIR / "allow_block.yml").read_text(encoding="utf-8")) or {}
+    crawler_config = yaml.safe_load((CONFIG_DIR / "crawler.yml").read_text(encoding="utf-8")) or {}
+    playwright_config = crawler_config.get("playwright", {})
+    profiles = playwright_config.get("auth_profiles", {})
+
+    auth_hints = {"by_domain": {}, "recent": []}
+    if AUTH_HINTS_PATH.exists():
+        try:
+            auth_hints = json.loads(AUTH_HINTS_PATH.read_text(encoding="utf-8")) or auth_hints
+        except json.JSONDecodeError:
+            auth_hints = {"by_domain": {}, "recent": []}
+
+    allow_rules = allow_block.get("allow_rules", []) or []
+    playwright_ok = playwright_available()
+    rules_payload = []
+
+    updated = False
+    for rule in allow_rules:
+        if isinstance(rule, dict) and not rule.get("id"):
+            _ensure_rule_id(rule)
+            updated = True
+
+    if updated:
+        write_yaml_config(CONFIG_DIR / "allow_block.yml", allow_block)
+        refresh_config("allow_block")
+
+    for rule in allow_rules:
+        if not isinstance(rule, dict):
+            continue
+        rule_id = rule.get("id") or str(uuid.uuid4())
+        pattern = rule.get("pattern", "")
+        auth_profile = rule.get("auth_profile") or rule.get("authProfile")
+        auth_required_hint = _get_auth_hint_for_rule(rule, auth_hints)
+
+        auth_test = None
+        ui_status = "unknown"
+
+        if auth_profile:
+            profile = profiles.get(auth_profile)
+            if not profile:
+                ui_status = "invalid"
+                auth_test = {
+                    "profile_name": auth_profile,
+                    "ok": False,
+                    "final_url": "",
+                    "title": "",
+                    "status": None,
+                    "error_reason": "auth profile not found",
+                    "checked_at": _utcnow(),
+                }
+            elif not playwright_ok:
+                ui_status = "cannot_test"
+                auth_test = {
+                    "profile_name": auth_profile,
+                    "ok": False,
+                    "final_url": "",
+                    "title": "",
+                    "status": None,
+                    "error_reason": "playwright unavailable",
+                    "checked_at": _utcnow(),
+                }
+            else:
+                candidate_url = (
+                    profile.get("test_url")
+                    or (profile.get("test_urls") or [None])[0]
+                    or pattern
+                    or profile.get("start_url")
+                )
+                result = await validate_auth_profile(
+                    auth_profile,
+                    profile,
+                    crawler_config,
+                    allow_block,
+                    test_url_override=candidate_url,
+                )
+                auth_test = result.to_dict()
+                ui_status = "valid" if result.ok else "invalid"
+        else:
+            if auth_required_hint:
+                ui_status = "needs_profile"
+
+        rules_payload.append(
+            {
+                "rule_id": rule_id,
+                "pattern": pattern,
+                "auth_required_hint": auth_required_hint,
+                "auth_profile": auth_profile,
+                "auth_test": auth_test,
+                "ui_status": ui_status,
+            }
+        )
+
+    payload = {"rules": rules_payload, "playwright_available": playwright_ok}
+    _ALLOWED_URL_STATUS_CACHE["timestamp"] = datetime.now(timezone.utc).timestamp()
+    _ALLOWED_URL_STATUS_CACHE["payload"] = payload
+    return payload
 
 
 @router.get("/candidates/recommendations")
