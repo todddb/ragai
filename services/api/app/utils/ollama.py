@@ -16,6 +16,19 @@ from typing import Callable, Awaitable
 
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL") or "qwen2.5:latest"
 logger.info("Using Ollama model: %s (from OLLAMA_MODEL env or default)", OLLAMA_MODEL)
+OLLAMA_SEED = os.environ.get("OLLAMA_SEED")
+OLLAMA_OPTIONS: Dict[str, Any] = {
+    "temperature": float(os.environ.get("OLLAMA_TEMPERATURE", "0")),
+    "top_p": float(os.environ.get("OLLAMA_TOP_P", "0.1")),
+    "repeat_penalty": float(os.environ.get("OLLAMA_REPEAT_PENALTY", "1.05")),
+}
+if OLLAMA_SEED is not None:
+    try:
+        OLLAMA_OPTIONS["seed"] = int(OLLAMA_SEED)
+    except ValueError:
+        logger.warning("Invalid OLLAMA_SEED value %r; ignoring seed setting.", OLLAMA_SEED)
+else:
+    OLLAMA_OPTIONS["seed"] = 42
 
 
 async def _maybe_async_validate(fn: Callable[[str], Awaitable[T] | T], raw: str) -> T:
@@ -133,7 +146,10 @@ async def call_ollama_json(prompt: str, schema: Type[T]) -> T:
         # This mirrors a typical generate call and ensures prompt is passed through.
         try:
             logger.info("Calling Ollama model=%s endpoint=%s", OLLAMA_MODEL, OLLAMA_URL)
-            resp = await client.post(OLLAMA_URL, json={"model": OLLAMA_MODEL, "prompt": prompt})
+            resp = await client.post(
+                OLLAMA_URL,
+                json={"model": OLLAMA_MODEL, "prompt": prompt, "options": OLLAMA_OPTIONS},
+            )
             resp.raise_for_status()
         except Exception as e:
             logger.exception("Error calling Ollama generate endpoint")
@@ -240,7 +256,10 @@ async def call_ollama_json(prompt: str, schema: Type[T]) -> T:
         async with httpx.AsyncClient(timeout=60.0) as client:
             try:
                 logger.info("Calling Ollama (repair) model=%s endpoint=%s", OLLAMA_MODEL, OLLAMA_URL)
-                resp2 = await client.post(OLLAMA_URL, json={"model": OLLAMA_MODEL, "prompt": repair_prompt})
+                resp2 = await client.post(
+                    OLLAMA_URL,
+                    json={"model": OLLAMA_MODEL, "prompt": repair_prompt, "options": OLLAMA_OPTIONS},
+                )
                 resp2.raise_for_status()
                 # reuse the same NDJSON-aware extraction logic for the repair response
                 raw_body2 = None
@@ -311,4 +330,3 @@ async def call_ollama_json(prompt: str, schema: Type[T]) -> T:
                 f"First error: {first_error}; Second error: {second_error}\n"
                 f"Snippets:\nfirst_raw={raw_body[:1000]!r}\nsecond_raw={raw_body2[:1000]!r}"
             )
-

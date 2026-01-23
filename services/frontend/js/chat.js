@@ -160,49 +160,87 @@ function buildSourcesPanel(content) {
   container.appendChild(heading);
 
   const list = document.createElement('div');
-  list.className = 'sources-list-inline';
+  list.className = 'sources-list';
 
-  // Show top 3 sources inline
-  const topSources = sources.slice(0, 3);
-  topSources.forEach((source, index) => {
+  const createSourceItem = (source, indexLabel) => {
     const item = document.createElement('div');
-    item.className = 'source-item-inline';
+    item.className = 'source-item';
+
+    const header = document.createElement('div');
+    header.className = 'source-header';
+
+    const titleWrap = document.createElement('div');
+    titleWrap.className = 'source-title';
 
     const indexSpan = document.createElement('span');
     indexSpan.className = 'source-index';
-    indexSpan.textContent = `[${index + 1}]`;
-    item.appendChild(indexSpan);
+    indexSpan.textContent = `[${indexLabel}]`;
+    titleWrap.appendChild(indexSpan);
 
     const titleLink = document.createElement('a');
     titleLink.href = source.url || '#';
     titleLink.target = '_blank';
     titleLink.rel = 'noopener noreferrer';
     titleLink.className = 'source-link';
-    titleLink.textContent = source.title || source.url || `Source ${index + 1}`;
-    item.appendChild(titleLink);
+    titleLink.textContent = source.title || source.url || `Source ${indexLabel}`;
+    titleWrap.appendChild(titleLink);
+
+    header.appendChild(titleWrap);
+
+    const metaParts = [];
+    if (source.match_count > 1) {
+      metaParts.push(`${source.match_count} matches`);
+    }
+    if (source.best_score) {
+      metaParts.push(`score ${Number(source.best_score).toFixed(2)}`);
+    }
+    if (metaParts.length) {
+      const metaSpan = document.createElement('div');
+      metaSpan.className = 'source-score';
+      metaSpan.textContent = metaParts.join(' • ');
+      header.appendChild(metaSpan);
+    }
+
+    item.appendChild(header);
+
+    if (source.url) {
+      const urlDiv = document.createElement('div');
+      urlDiv.className = 'source-url';
+      urlDiv.textContent = source.url;
+      item.appendChild(urlDiv);
+    }
 
     if (source.snippet) {
-      const snippetDiv = document.createElement('div');
-      snippetDiv.className = 'source-snippet-inline';
-      snippetDiv.textContent = (source.snippet || '').slice(0, 200) + '...';
-      item.appendChild(snippetDiv);
+      const snippetWrap = document.createElement('div');
+      snippetWrap.className = 'source-snippet';
+
+      const snippetText = document.createElement('p');
+      snippetText.className = 'source-snippet-text';
+      snippetText.textContent = source.snippet;
+      snippetWrap.appendChild(snippetText);
+
+      if (source.snippet.length > 240) {
+        const toggleBtn = document.createElement('button');
+        toggleBtn.type = 'button';
+        toggleBtn.className = 'source-snippet-toggle';
+        toggleBtn.textContent = 'Expand';
+        toggleBtn.addEventListener('click', () => {
+          const expanded = snippetWrap.classList.toggle('expanded');
+          toggleBtn.textContent = expanded ? 'Collapse' : 'Expand';
+        });
+        snippetWrap.appendChild(toggleBtn);
+      }
+
+      item.appendChild(snippetWrap);
     }
 
-    if (source.match_count > 1 || source.best_score) {
-      const metaDiv = document.createElement('div');
-      metaDiv.className = 'source-meta-inline';
-      const parts = [];
-      if (source.match_count > 1) {
-        parts.push(`${source.match_count} matches`);
-      }
-      if (source.best_score) {
-        parts.push(`score ${Number(source.best_score).toFixed(2)}`);
-      }
-      metaDiv.textContent = parts.join(' • ');
-      item.appendChild(metaDiv);
-    }
+    return item;
+  };
 
-    list.appendChild(item);
+  // Show top 3 sources inline
+  const topSources = sources.slice(0, 3);
+  topSources.forEach((source, index) => {
+    list.appendChild(createSourceItem(source, index + 1));
   });
 
   container.appendChild(list);
@@ -219,30 +257,7 @@ function buildSourcesPanel(content) {
     moreContainer.style.display = 'none';
 
     sources.slice(3).forEach((source, j) => {
-      const item = document.createElement('div');
-      item.className = 'source-item-inline';
-
-      const indexSpan = document.createElement('span');
-      indexSpan.className = 'source-index';
-      indexSpan.textContent = `[${3 + j + 1}]`;
-      item.appendChild(indexSpan);
-
-      const titleLink = document.createElement('a');
-      titleLink.href = source.url || '#';
-      titleLink.target = '_blank';
-      titleLink.rel = 'noopener noreferrer';
-      titleLink.className = 'source-link';
-      titleLink.textContent = source.title || source.url || `Source ${3 + j + 1}`;
-      item.appendChild(titleLink);
-
-      if (source.snippet) {
-        const snippetDiv = document.createElement('div');
-        snippetDiv.className = 'source-snippet-inline';
-        snippetDiv.textContent = (source.snippet || '').slice(0, 200) + '...';
-        item.appendChild(snippetDiv);
-      }
-
-      moreContainer.appendChild(item);
+      moreContainer.appendChild(createSourceItem(source, 3 + j + 1));
     });
 
     moreBtn.addEventListener('click', () => {
