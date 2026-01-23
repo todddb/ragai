@@ -29,6 +29,60 @@ async def _maybe_async_validate(fn: Callable[[str], Awaitable[T] | T], raw: str)
         return fn(raw)  # type: ignore[return-value]
 
 
+def _parse_resp_text_and_join(resp) -> str:
+    """Return stitched string from resp (NDJSON-aware). Useful for testing."""
+    resp_text = resp.text or ""
+    content_type = (resp.headers.get("content-type") or "").lower()
+
+    # Heuristic: if content-type is NDJSON or response contains newline-delimited JSON lines,
+    # parse each line and stitch together any "response" fields (Ollama streaming fragments).
+    if "application/x-ndjson" in content_type or "\n{" in resp_text:
+        lines = [L for L in resp_text.splitlines() if L.strip()]
+        parts: list[str] = []
+        for L in lines:
+            try:
+                obj = json.loads(L)
+            except Exception:
+                # not a JSON line — keep the raw line
+                parts.append(L)
+                continue
+
+            # Prefer the streaming "response" token if present (common Ollama streaming format)
+            if isinstance(obj, dict) and "response" in obj:
+                parts.append(obj["response"])
+            else:
+                # fallback: stringify the object so we don't lose info
+                parts.append(json.dumps(obj))
+
+        raw_body = "".join(parts).strip()
+        logger.debug("Detected NDJSON from Ollama: lines=%d joined_len=%d", len(lines), len(raw_body))
+        return raw_body
+    else:
+        # Non-streaming path: try to parse full JSON first, else use resp.text
+        body_json = None
+        try:
+            body_json = json.loads(resp_text)
+        except Exception:
+            body_json = None
+
+        if isinstance(body_json, dict):
+            if "text" in body_json and isinstance(body_json["text"], str):
+                return body_json["text"]
+            elif "output" in body_json and isinstance(body_json["output"], str):
+                return body_json["output"]
+            elif "choices" in body_json and isinstance(body_json["choices"], list):
+                # pick first choice content (common LLM API shape)
+                for c in body_json["choices"]:
+                    if isinstance(c, dict):
+                        if "message" in c and isinstance(c["message"], dict) and "content" in c["message"]:
+                            return c["message"]["content"]
+                        if "text" in c and isinstance(c["text"], str):
+                            return c["text"]
+            return json.dumps(body_json)
+        else:
+            return resp_text or ""
+
+
 async def call_ollama_json(prompt: str, schema: Type[T]) -> T:
     """
     Call Ollama (async) and return an instance of `schema` validated from the model's JSON response.
@@ -89,45 +143,34 @@ async def call_ollama_json(prompt: str, schema: Type[T]) -> T:
         try:
             raw_body = None
 
-            # Helpful: check content-type for NDJSON (streaming)
-            content_type = resp.headers.get("content-type", "").lower()
-            if "application/x-ndjson" in content_type or "ndjson" in content_type:
-                # resp.text may include many newline-separated JSON objects.
-                # Parse each line and join "response" fields (this matches Ollama's streaming structure).
-                pieces = []
-                for line in resp.text.splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        obj = json.loads(line)
-                        # Ollama streaming uses "response" field for text fragments
-                        if isinstance(obj, dict) and "response" in obj and obj["response"] is not None:
-                            pieces.append(str(obj["response"]))
-                        else:
-                            # If object contains nested content fields, try common variants
-                            if "text" in obj and isinstance(obj["text"], str):
-                                pieces.append(obj["text"])
-                            elif "output" in obj and isinstance(obj["output"], str):
-                                pieces.append(obj["output"])
-                            elif "choices" in obj and isinstance(obj["choices"], list):
-                                # try to extract content from choices
-                                for c in obj["choices"]:
-                                    if isinstance(c, dict):
-                                        if "message" in c and isinstance(c["message"], dict) and "content" in c["message"]:
-                                            pieces.append(c["message"]["content"])
-                                            break
-                                        if "text" in c and isinstance(c["text"], str):
-                                            pieces.append(c["text"])
-                                            break
-                    except Exception:
-                        # ignore parsing errors for individual lines; include raw line in fallback
-                        logger.debug("Failed to parse NDJSON line from Ollama: %r", line)
-                        pieces.append(line)
-                raw_body = "".join(pieces)
+            # full response text from httpx (Ollama streams NDJSON as plain text)
+            resp_text = resp.text or ""
+            content_type = (resp.headers.get("content-type") or "").lower()
 
+            # Heuristic: if content-type is NDJSON or response contains newline-delimited JSON lines,
+            # parse each line and stitch together any "response" fields (Ollama streaming fragments).
+            if "application/x-ndjson" in content_type or "\n{" in resp_text:
+                lines = [L for L in resp_text.splitlines() if L.strip()]
+                parts: list[str] = []
+                for L in lines:
+                    try:
+                        obj = json.loads(L)
+                    except Exception:
+                        # not a JSON line — keep the raw line
+                        parts.append(L)
+                        continue
+
+                    # Prefer the streaming "response" token if present (common Ollama streaming format)
+                    if isinstance(obj, dict) and "response" in obj:
+                        parts.append(obj["response"])
+                    else:
+                        # fallback: stringify the object so we don't lose info
+                        parts.append(json.dumps(obj))
+
+                raw_body = "".join(parts).strip()
+                logger.debug("Detected NDJSON from Ollama: lines=%d joined_len=%d", len(lines), len(raw_body))
             else:
-                # Try to parse response as JSON dict first (non-streaming)
+                # Non-streaming path: try to parse full JSON first, else use resp.text
                 body_json = None
                 try:
                     body_json = resp.json()
@@ -135,13 +178,12 @@ async def call_ollama_json(prompt: str, schema: Type[T]) -> T:
                     body_json = None
 
                 if isinstance(body_json, dict):
-                    # Try common places for generated text
                     if "text" in body_json and isinstance(body_json["text"], str):
                         raw_body = body_json["text"]
                     elif "output" in body_json and isinstance(body_json["output"], str):
                         raw_body = body_json["output"]
                     elif "choices" in body_json and isinstance(body_json["choices"], list):
-                        # try to extract content from choices
+                        # pick first choice content (common LLM API shape)
                         for c in body_json["choices"]:
                             if isinstance(c, dict):
                                 if "message" in c and isinstance(c["message"], dict) and "content" in c["message"]:
@@ -151,36 +193,13 @@ async def call_ollama_json(prompt: str, schema: Type[T]) -> T:
                                     raw_body = c["text"]
                                     break
                     else:
-                        # fallback to entire JSON text
                         raw_body = json.dumps(body_json)
                 else:
-                    # If not JSON payload, treat response text as raw model output
-                    # However, if resp.text includes multiple JSON objects (ndjson) join 'response' fields
-                    text = resp.text
-                    # detect ndjson-ish text with multiple JSON objects separated by newline
-                    if "\n" in text and text.strip().startswith("{") and "response" in text:
-                        pieces = []
-                        for line in text.splitlines():
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                obj = json.loads(line)
-                                if isinstance(obj, dict) and "response" in obj and obj["response"] is not None:
-                                    pieces.append(str(obj["response"]))
-                                else:
-                                    pieces.append(line)
-                            except Exception:
-                                pieces.append(line)
-                        raw_body = "".join(pieces)
-                    else:
-                        raw_body = text
+                    raw_body = resp_text
 
-            # final fallback
             if raw_body is None:
-                raw_body = resp.text
-
-        except Exception as e:
+                raw_body = resp_text or ""
+        except Exception:
             logger.exception("Failed to extract body from Ollama response")
             raise
 
@@ -225,41 +244,35 @@ async def call_ollama_json(prompt: str, schema: Type[T]) -> T:
                 resp2.raise_for_status()
                 # reuse the same NDJSON-aware extraction logic for the repair response
                 raw_body2 = None
-                content_type2 = resp2.headers.get("content-type", "").lower()
-                if "application/x-ndjson" in content_type2 or "ndjson" in content_type2:
-                    pieces = []
-                    for line in resp2.text.splitlines():
-                        line = line.strip()
-                        if not line:
-                            continue
+                resp_text2 = resp2.text or ""
+                content_type2 = (resp2.headers.get("content-type") or "").lower()
+
+                # Same NDJSON detection heuristic as initial response
+                if "application/x-ndjson" in content_type2 or "\n{" in resp_text2:
+                    lines2 = [L for L in resp_text2.splitlines() if L.strip()]
+                    parts2: list[str] = []
+                    for L in lines2:
                         try:
-                            obj = json.loads(line)
-                            if isinstance(obj, dict) and "response" in obj and obj["response"] is not None:
-                                pieces.append(str(obj["response"]))
-                            else:
-                                if "text" in obj and isinstance(obj["text"], str):
-                                    pieces.append(obj["text"])
-                                elif "output" in obj and isinstance(obj["output"], str):
-                                    pieces.append(obj["output"])
-                                elif "choices" in obj and isinstance(obj["choices"], list):
-                                    for c in obj["choices"]:
-                                        if isinstance(c, dict):
-                                            if "message" in c and isinstance(c["message"], dict) and "content" in c["message"]:
-                                                pieces.append(c["message"]["content"])
-                                                break
-                                            if "text" in c and isinstance(c["text"], str):
-                                                pieces.append(c["text"])
-                                                break
+                            obj = json.loads(L)
                         except Exception:
-                            logger.debug("Failed to parse NDJSON line (repair): %r", line)
-                            pieces.append(line)
-                    raw_body2 = "".join(pieces)
+                            parts2.append(L)
+                            continue
+
+                        if isinstance(obj, dict) and "response" in obj:
+                            parts2.append(obj["response"])
+                        else:
+                            parts2.append(json.dumps(obj))
+
+                    raw_body2 = "".join(parts2).strip()
+                    logger.debug("Detected NDJSON from Ollama (repair): lines=%d joined_len=%d", len(lines2), len(raw_body2))
                 else:
-                    # non-ndjson fallback
+                    # Non-streaming path
+                    body_json2 = None
                     try:
                         body_json2 = resp2.json()
                     except Exception:
                         body_json2 = None
+
                     if isinstance(body_json2, dict):
                         if "text" in body_json2 and isinstance(body_json2["text"], str):
                             raw_body2 = body_json2["text"]
@@ -277,27 +290,10 @@ async def call_ollama_json(prompt: str, schema: Type[T]) -> T:
                         else:
                             raw_body2 = json.dumps(body_json2)
                     else:
-                        text2 = resp2.text
-                        if "\n" in text2 and text2.strip().startswith("{") and "response" in text2:
-                            pieces = []
-                            for line in text2.splitlines():
-                                line = line.strip()
-                                if not line:
-                                    continue
-                                try:
-                                    obj = json.loads(line)
-                                    if isinstance(obj, dict) and "response" in obj and obj["response"] is not None:
-                                        pieces.append(str(obj["response"]))
-                                    else:
-                                        pieces.append(line)
-                                except Exception:
-                                    pieces.append(line)
-                            raw_body2 = "".join(pieces)
-                        else:
-                            raw_body2 = text2
+                        raw_body2 = resp_text2
 
                 if raw_body2 is None:
-                    raw_body2 = resp2.text
+                    raw_body2 = resp_text2 or ""
 
             except Exception:
                 logger.exception("Repair request to Ollama failed")
