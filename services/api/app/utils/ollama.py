@@ -1,22 +1,21 @@
 # services/api/app/utils/ollama.py
-import asyncio
 import json
 import logging
-import os
 import time
-from pathlib import Path
-from typing import Callable, Awaitable, Type, TypeVar
-
 import httpx
+import os
+from pathlib import Path
+from typing import Any, Dict, Optional, Type, TypeVar
 from pydantic import BaseModel, ValidationError
 
 T = TypeVar("T", bound=BaseModel)
 logger = logging.getLogger(__name__)
 
-# Config via environment (docker-compose already sets these)
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:latest")
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://ollama:11434")
-OLLAMA_URL = f"{OLLAMA_HOST.rstrip('/')}/api/generate"
+import asyncio
+from typing import Callable, Awaitable
+
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL") or "qwen2.5:latest"
+logger.info("Using Ollama model: %s (from OLLAMA_MODEL env or default)", OLLAMA_MODEL)
 
 
 async def _maybe_async_validate(fn: Callable[[str], Awaitable[T] | T], raw: str) -> T:
@@ -30,29 +29,6 @@ async def _maybe_async_validate(fn: Callable[[str], Awaitable[T] | T], raw: str)
         return fn(raw)  # type: ignore[return-value]
 
 
-def _dump_raw(raw_text: str, prompt: str, schema_name: str, tag: str = "json_fail") -> None:
-    """
-    Persist raw model outputs plus a small metadata file for easier debugging.
-    """
-    try:
-        debug_dir = Path("data/logs/ollama_raw")
-        debug_dir.mkdir(parents=True, exist_ok=True)
-        ts = int(time.time())
-        fname = debug_dir / f"{tag}_{ts}.txt"
-        fname.write_text(raw_text, encoding="utf-8")
-        meta = {
-            "timestamp": ts,
-            "schema": schema_name,
-            "prompt_snippet": (prompt or "")[:1000],
-            "tag": tag,
-        }
-        meta_fname = debug_dir / f"{tag}_{ts}.meta.json"
-        meta_fname.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-        logger.error("Wrote raw Ollama response to %s (meta %s)", str(fname), str(meta_fname))
-    except Exception:
-        logger.exception("Failed to write ollama raw response to disk")
-
-
 async def call_ollama_json(prompt: str, schema: Type[T]) -> T:
     """
     Call Ollama (async) and return an instance of `schema` validated from the model's JSON response.
@@ -62,6 +38,9 @@ async def call_ollama_json(prompt: str, schema: Type[T]) -> T:
       - If parsing/validation fails, re-prompt once with a short "repair JSON" instruction.
       - If still failing, save the raw response to data/logs/ollama_raw/ for debugging and raise ValueError.
     """
+    # endpoint - keep consistent with your environment
+    OLLAMA_URL = "http://ollama:11434/api/generate"
+
     async def _parse_and_validate(raw_text: str) -> T:
         # First parse JSON
         try:
@@ -83,52 +62,125 @@ async def call_ollama_json(prompt: str, schema: Type[T]) -> T:
             # re-raise so caller can decide; include the validation error text
             raise ve
 
+    # helper to persist raw model text for debugging
+    def _dump_raw(raw_text: str, tag: str = "json_fail"):
+        try:
+            debug_dir = Path("data/logs/ollama_raw")
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            fname = debug_dir / f"{tag}_{int(time.time())}.txt"
+            fname.write_text(raw_text, encoding="utf-8")
+            logger.error("Wrote raw Ollama response to %s", str(fname))
+        except Exception:
+            logger.exception("Failed to write ollama raw response to disk")
+
     # make the HTTP call once
     async with httpx.AsyncClient(timeout=60.0) as client:
+        # The exact request body / headers depend on your Ollama usage.
+        # This mirrors a typical generate call and ensures prompt is passed through.
         try:
             logger.info("Calling Ollama model=%s endpoint=%s", OLLAMA_MODEL, OLLAMA_URL)
             resp = await client.post(OLLAMA_URL, json={"model": OLLAMA_MODEL, "prompt": prompt})
-            try:
-                resp.raise_for_status()
-            except Exception:
-                # log body to make 404/400 easier to debug
-                logger.error("Ollama responded with status=%s body=%s", resp.status_code, resp.text[:2000])
-                resp.raise_for_status()
-        except Exception:
+            resp.raise_for_status()
+        except Exception as e:
             logger.exception("Error calling Ollama generate endpoint")
             raise
 
         # extract text response (assumes response body contains the model text; adjust if your API differs)
         try:
             raw_body = None
-            try:
-                body_json = resp.json()
-            except Exception:
-                body_json = None
 
-            if isinstance(body_json, dict):
-                # Try common places for generated text
-                if "text" in body_json and isinstance(body_json["text"], str):
-                    raw_body = body_json["text"]
-                elif "output" in body_json and isinstance(body_json["output"], str):
-                    raw_body = body_json["output"]
-                elif "choices" in body_json and isinstance(body_json["choices"], list):
-                    for c in body_json["choices"]:
-                        if isinstance(c, dict):
-                            if "message" in c and isinstance(c["message"], dict) and "content" in c["message"]:
-                                raw_body = c["message"]["content"]
-                                break
-                            if "text" in c and isinstance(c["text"], str):
-                                raw_body = c["text"]
-                                break
-                else:
-                    raw_body = json.dumps(body_json)
+            # Helpful: check content-type for NDJSON (streaming)
+            content_type = resp.headers.get("content-type", "").lower()
+            if "application/x-ndjson" in content_type or "ndjson" in content_type:
+                # resp.text may include many newline-separated JSON objects.
+                # Parse each line and join "response" fields (this matches Ollama's streaming structure).
+                pieces = []
+                for line in resp.text.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                        # Ollama streaming uses "response" field for text fragments
+                        if isinstance(obj, dict) and "response" in obj and obj["response"] is not None:
+                            pieces.append(str(obj["response"]))
+                        else:
+                            # If object contains nested content fields, try common variants
+                            if "text" in obj and isinstance(obj["text"], str):
+                                pieces.append(obj["text"])
+                            elif "output" in obj and isinstance(obj["output"], str):
+                                pieces.append(obj["output"])
+                            elif "choices" in obj and isinstance(obj["choices"], list):
+                                # try to extract content from choices
+                                for c in obj["choices"]:
+                                    if isinstance(c, dict):
+                                        if "message" in c and isinstance(c["message"], dict) and "content" in c["message"]:
+                                            pieces.append(c["message"]["content"])
+                                            break
+                                        if "text" in c and isinstance(c["text"], str):
+                                            pieces.append(c["text"])
+                                            break
+                    except Exception:
+                        # ignore parsing errors for individual lines; include raw line in fallback
+                        logger.debug("Failed to parse NDJSON line from Ollama: %r", line)
+                        pieces.append(line)
+                raw_body = "".join(pieces)
+
             else:
-                raw_body = resp.text
+                # Try to parse response as JSON dict first (non-streaming)
+                body_json = None
+                try:
+                    body_json = resp.json()
+                except Exception:
+                    body_json = None
 
+                if isinstance(body_json, dict):
+                    # Try common places for generated text
+                    if "text" in body_json and isinstance(body_json["text"], str):
+                        raw_body = body_json["text"]
+                    elif "output" in body_json and isinstance(body_json["output"], str):
+                        raw_body = body_json["output"]
+                    elif "choices" in body_json and isinstance(body_json["choices"], list):
+                        # try to extract content from choices
+                        for c in body_json["choices"]:
+                            if isinstance(c, dict):
+                                if "message" in c and isinstance(c["message"], dict) and "content" in c["message"]:
+                                    raw_body = c["message"]["content"]
+                                    break
+                                if "text" in c and isinstance(c["text"], str):
+                                    raw_body = c["text"]
+                                    break
+                    else:
+                        # fallback to entire JSON text
+                        raw_body = json.dumps(body_json)
+                else:
+                    # If not JSON payload, treat response text as raw model output
+                    # However, if resp.text includes multiple JSON objects (ndjson) join 'response' fields
+                    text = resp.text
+                    # detect ndjson-ish text with multiple JSON objects separated by newline
+                    if "\n" in text and text.strip().startswith("{") and "response" in text:
+                        pieces = []
+                        for line in text.splitlines():
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                obj = json.loads(line)
+                                if isinstance(obj, dict) and "response" in obj and obj["response"] is not None:
+                                    pieces.append(str(obj["response"]))
+                                else:
+                                    pieces.append(line)
+                            except Exception:
+                                pieces.append(line)
+                        raw_body = "".join(pieces)
+                    else:
+                        raw_body = text
+
+            # final fallback
             if raw_body is None:
                 raw_body = resp.text
-        except Exception:
+
+        except Exception as e:
             logger.exception("Failed to extract body from Ollama response")
             raise
 
@@ -137,7 +189,7 @@ async def call_ollama_json(prompt: str, schema: Type[T]) -> T:
         return await _maybe_async_validate(_parse_and_validate, raw_body)
     except Exception as first_error:
         # Save raw and attempt one repair re-prompt
-        _dump_raw(raw_body, prompt, schema.__name__ if hasattr(schema, "__name__") else str(schema), tag="first_fail")
+        _dump_raw(raw_body, tag="first_fail")
 
         logger.warning(
             "Initial validation failed: %s. Attempting one repair prompt to enforce JSON.",
@@ -162,28 +214,91 @@ async def call_ollama_json(prompt: str, schema: Type[T]) -> T:
             else:
                 repair_prompt += f"{schema}"
         except Exception:
-            repair_prompt += f"{getattr(schema, '__name__', str(schema))}"
+            # ignore schema formatting errors
+            repair_prompt += f"{schema.__name__}"
 
         # call Ollama one more time with the repair prompt
         async with httpx.AsyncClient(timeout=60.0) as client:
             try:
                 logger.info("Calling Ollama (repair) model=%s endpoint=%s", OLLAMA_MODEL, OLLAMA_URL)
                 resp2 = await client.post(OLLAMA_URL, json={"model": OLLAMA_MODEL, "prompt": repair_prompt})
-                try:
-                    resp2.raise_for_status()
-                except Exception:
-                    logger.error("Ollama (repair) responded with status=%s body=%s", resp2.status_code, resp2.text[:2000])
-                    resp2.raise_for_status()
-
-                try:
-                    content_type = resp2.headers.get("content-type", "").lower()
-                    raw_body2 = resp2.json() if content_type.startswith("application/json") else resp2.text
-                    if isinstance(raw_body2, dict):
-                        raw_body2 = json.dumps(raw_body2)
+                resp2.raise_for_status()
+                # reuse the same NDJSON-aware extraction logic for the repair response
+                raw_body2 = None
+                content_type2 = resp2.headers.get("content-type", "").lower()
+                if "application/x-ndjson" in content_type2 or "ndjson" in content_type2:
+                    pieces = []
+                    for line in resp2.text.splitlines():
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                            if isinstance(obj, dict) and "response" in obj and obj["response"] is not None:
+                                pieces.append(str(obj["response"]))
+                            else:
+                                if "text" in obj and isinstance(obj["text"], str):
+                                    pieces.append(obj["text"])
+                                elif "output" in obj and isinstance(obj["output"], str):
+                                    pieces.append(obj["output"])
+                                elif "choices" in obj and isinstance(obj["choices"], list):
+                                    for c in obj["choices"]:
+                                        if isinstance(c, dict):
+                                            if "message" in c and isinstance(c["message"], dict) and "content" in c["message"]:
+                                                pieces.append(c["message"]["content"])
+                                                break
+                                            if "text" in c and isinstance(c["text"], str):
+                                                pieces.append(c["text"])
+                                                break
+                        except Exception:
+                            logger.debug("Failed to parse NDJSON line (repair): %r", line)
+                            pieces.append(line)
+                    raw_body2 = "".join(pieces)
+                else:
+                    # non-ndjson fallback
+                    try:
+                        body_json2 = resp2.json()
+                    except Exception:
+                        body_json2 = None
+                    if isinstance(body_json2, dict):
+                        if "text" in body_json2 and isinstance(body_json2["text"], str):
+                            raw_body2 = body_json2["text"]
+                        elif "output" in body_json2 and isinstance(body_json2["output"], str):
+                            raw_body2 = body_json2["output"]
+                        elif "choices" in body_json2 and isinstance(body_json2["choices"], list):
+                            for c in body_json2["choices"]:
+                                if isinstance(c, dict):
+                                    if "message" in c and isinstance(c["message"], dict) and "content" in c["message"]:
+                                        raw_body2 = c["message"]["content"]
+                                        break
+                                    if "text" in c and isinstance(c["text"], str):
+                                        raw_body2 = c["text"]
+                                        break
+                        else:
+                            raw_body2 = json.dumps(body_json2)
                     else:
-                        raw_body2 = str(raw_body2)
-                except Exception:
+                        text2 = resp2.text
+                        if "\n" in text2 and text2.strip().startswith("{") and "response" in text2:
+                            pieces = []
+                            for line in text2.splitlines():
+                                line = line.strip()
+                                if not line:
+                                    continue
+                                try:
+                                    obj = json.loads(line)
+                                    if isinstance(obj, dict) and "response" in obj and obj["response"] is not None:
+                                        pieces.append(str(obj["response"]))
+                                    else:
+                                        pieces.append(line)
+                                except Exception:
+                                    pieces.append(line)
+                            raw_body2 = "".join(pieces)
+                        else:
+                            raw_body2 = text2
+
+                if raw_body2 is None:
                     raw_body2 = resp2.text
+
             except Exception:
                 logger.exception("Repair request to Ollama failed")
                 raise
@@ -193,7 +308,7 @@ async def call_ollama_json(prompt: str, schema: Type[T]) -> T:
             return await _maybe_async_validate(_parse_and_validate, raw_body2)
         except Exception as second_error:
             # dump second raw for debugging and raise a helpful error
-            _dump_raw(raw_body2, repair_prompt, schema.__name__ if hasattr(schema, "__name__") else str(schema), tag="second_fail")
+            _dump_raw(raw_body2, tag="second_fail")
             logger.exception("Second validation attempt failed")
             raise ValueError(
                 "Model response could not be parsed into the expected schema after a repair attempt. "
