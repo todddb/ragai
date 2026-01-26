@@ -14,6 +14,7 @@ Checks:
 Outputs:
 - Job log: data/logs/jobs/{job_id}.log
 - Summary JSON: data/logs/summaries/{job_id}.json
+- Also writes: data/logs/summaries/validate_ingest_latest.json
 """
 
 import argparse
@@ -42,6 +43,28 @@ DEFAULT_QDRANT_HOST = "http://localhost:6333"
 DEFAULT_CONFIG_PATH = "config/system.yml"
 DEFAULT_DB_PATH = "data/ingest/metadata.db"
 DEFAULT_ARTIFACTS_DIR = "data/artifacts"
+
+# SQL schema for the ingest metadata database
+SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS documents (
+    doc_id TEXT PRIMARY KEY,
+    url TEXT,
+    content_hash TEXT,
+    ingested_at TEXT,
+    chunk_count INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS chunks (
+    chunk_id TEXT PRIMARY KEY,
+    doc_id TEXT,
+    chunk_index INTEGER,
+    vector_id TEXT,
+    FOREIGN KEY (doc_id) REFERENCES documents(doc_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_documents_url ON documents(url);
+CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON chunks(doc_id);
+"""
 
 
 @dataclass
@@ -78,10 +101,74 @@ def count_artifacts() -> int:
     return len(list(artifacts_dir.glob("*/artifact.json")))
 
 
-def get_db_counts(db_path: str) -> Dict[str, int]:
-    """Get document and chunk counts from SQLite."""
+def ensure_db_schema(db_path: str) -> bool:
+    """Ensure the database schema is initialized. Returns True if successful."""
+    try:
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # Enable WAL mode for better concurrent access
+        cursor.execute("PRAGMA journal_mode=WAL;")
+
+        # Execute schema creation
+        cursor.executescript(SCHEMA_SQL)
+
+        # Set schema version
+        cursor.execute("PRAGMA user_version = 1;")
+
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Warning: Could not initialize DB schema: {e}", file=sys.stderr)
+        return False
+
+
+def check_schema_exists(db_path: str) -> Dict[str, Any]:
+    """Check if the required tables exist in the database."""
+    result = {"exists": False, "tables": [], "error": None}
+
     if not Path(db_path).exists():
-        return {"documents": 0, "chunks": 0}
+        result["error"] = "database_not_found"
+        return result
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
+        tables = [row[0] for row in cursor.fetchall()]
+
+        conn.close()
+
+        result["tables"] = tables
+        result["exists"] = "documents" in tables and "chunks" in tables
+        return result
+    except Exception as e:
+        result["error"] = str(e)
+        return result
+
+
+def get_db_counts(db_path: str) -> Dict[str, Any]:
+    """Get document and chunk counts from SQLite. Ensures schema exists first."""
+    if not Path(db_path).exists():
+        return {"documents": 0, "chunks": 0, "db_exists": False}
+
+    # Check if schema exists
+    schema_check = check_schema_exists(db_path)
+    if not schema_check["exists"]:
+        # Try to initialize the schema
+        if ensure_db_schema(db_path):
+            # Schema was just initialized - tables are empty
+            return {"documents": 0, "chunks": 0, "db_exists": True, "schema_initialized": True}
+        else:
+            return {
+                "documents": -1,
+                "chunks": -1,
+                "db_exists": True,
+                "error": f"Schema missing and could not be initialized. Tables found: {schema_check['tables']}"
+            }
 
     try:
         conn = sqlite3.connect(db_path)
@@ -91,9 +178,9 @@ def get_db_counts(db_path: str) -> Dict[str, int]:
         chunks = cursor.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
 
         conn.close()
-        return {"documents": docs, "chunks": chunks}
+        return {"documents": docs, "chunks": chunks, "db_exists": True}
     except Exception as e:
-        return {"documents": -1, "chunks": -1, "error": str(e)}
+        return {"documents": -1, "chunks": -1, "db_exists": True, "error": str(e)}
 
 
 def get_qdrant_count(qdrant_host: str, collection: str) -> int:
@@ -205,17 +292,48 @@ def validate_data_integrity(
     db_counts = get_db_counts(db_path)
     qdrant_count = get_qdrant_count(qdrant_host, collection)
 
+    # Check for artifact count first
+    artifact_count = count_artifacts()
+
+    # Handle DB errors
     if db_counts.get("documents", 0) < 0:
+        error_msg = db_counts.get("error", "unknown")
         findings.append(
             Finding(
                 severity="high",
                 code="DB_ERROR",
-                message=f"Failed to query SQLite database: {db_counts.get('error', 'unknown')}",
+                message=f"Failed to query SQLite database: {error_msg}",
                 evidence=db_path,
             )
         )
         return findings
 
+    # Handle schema being just initialized (no ingest run yet)
+    if db_counts.get("schema_initialized"):
+        findings.append(
+            Finding(
+                severity="medium",
+                code="SCHEMA_JUST_INITIALIZED",
+                message="Metadata database schema was just initialized (tables were empty)",
+                evidence=db_path,
+            )
+        )
+
+    doc_count = db_counts.get("documents", 0)
+    chunk_count = db_counts.get("chunks", 0)
+
+    # Check if no ingest has been run yet
+    if artifact_count > 0 and doc_count == 0:
+        findings.append(
+            Finding(
+                severity="medium",
+                code="NO_INGEST_RUN_YET",
+                message=f"Found {artifact_count} artifacts but no documents in metadata DB. Run ingest to process artifacts.",
+                evidence=f"artifacts={artifact_count}, documents=0",
+            )
+        )
+
+    # Handle Qdrant errors
     if qdrant_count < 0:
         findings.append(
             Finding(
@@ -227,28 +345,60 @@ def validate_data_integrity(
         )
         return findings
 
-    # Check if chunk count matches vector count (approximately)
-    chunk_count = db_counts.get("chunks", 0)
-    if abs(chunk_count - qdrant_count) > max(chunk_count * 0.01, 10):
-        findings.append(
-            Finding(
-                severity="high",
-                code="VECTOR_MISMATCH",
-                message=f"Qdrant has {qdrant_count} vectors but metadata DB has {chunk_count} chunks",
-                evidence=f"qdrant={qdrant_count}, db={chunk_count}, diff={abs(chunk_count - qdrant_count)}",
+    # Check if Qdrant is empty
+    if qdrant_count == 0:
+        if artifact_count > 0 or doc_count > 0:
+            findings.append(
+                Finding(
+                    severity="medium",
+                    code="QDRANT_EMPTY",
+                    message=f"Qdrant collection '{collection}' is empty but artifacts/documents exist",
+                    evidence=f"qdrant=0, artifacts={artifact_count}, documents={doc_count}",
+                )
             )
-        )
+        else:
+            # Everything is empty - that's fine, no data yet
+            findings.append(
+                Finding(
+                    severity="low",
+                    code="NO_DATA_YET",
+                    message="No artifacts, documents, or vectors found. System is in initial state.",
+                    evidence=f"artifacts={artifact_count}, documents={doc_count}, vectors={qdrant_count}",
+                )
+            )
+
+    # Check if chunk count matches vector count (approximately)
+    if chunk_count > 0 or qdrant_count > 0:
+        if abs(chunk_count - qdrant_count) > max(chunk_count * 0.01, 10):
+            findings.append(
+                Finding(
+                    severity="high",
+                    code="VECTOR_MISMATCH",
+                    message=f"Qdrant has {qdrant_count} vectors but metadata DB has {chunk_count} chunks",
+                    evidence=f"qdrant={qdrant_count}, db={chunk_count}, diff={abs(chunk_count - qdrant_count)}",
+                )
+            )
 
     # Check if artifact count matches document count (approximately)
-    artifact_count = count_artifacts()
-    doc_count = db_counts.get("documents", 0)
-    if abs(artifact_count - doc_count) > max(artifact_count * 0.05, 5):
+    if artifact_count > 0 and doc_count > 0:
+        if abs(artifact_count - doc_count) > max(artifact_count * 0.05, 5):
+            findings.append(
+                Finding(
+                    severity="medium",
+                    code="ARTIFACT_MISMATCH",
+                    message=f"Found {artifact_count} artifacts but {doc_count} documents in DB",
+                    evidence=f"artifacts={artifact_count}, documents={doc_count}",
+                )
+            )
+
+    # If no findings, add an "all good" finding
+    if not findings:
         findings.append(
             Finding(
-                severity="medium",
-                code="ARTIFACT_MISMATCH",
-                message=f"Found {artifact_count} artifacts but {doc_count} documents in DB",
-                evidence=f"artifacts={artifact_count}, documents={doc_count}",
+                severity="low",
+                code="DATA_INTEGRITY_OK",
+                message=f"Data integrity check passed: {artifact_count} artifacts, {doc_count} documents, {qdrant_count} vectors",
+                evidence=f"artifacts={artifact_count}, documents={doc_count}, vectors={qdrant_count}",
             )
         )
 
@@ -355,9 +505,19 @@ def main() -> int:
         "findings": [asdict(f) for f in findings],
     }
 
+    summary_json = json.dumps(summary, indent=2)
+
     # Write summary
-    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    summary_path.write_text(summary_json, encoding="utf-8")
     log(f"Summary written to {summary_path}")
+
+    # Write validate_ingest_latest.json
+    latest_path = summary_dir / "validate_ingest_latest.json"
+    try:
+        latest_path.write_text(summary_json, encoding="utf-8")
+        log(f"Latest summary written to {latest_path}")
+    except Exception as e:
+        log(f"Warning: could not write latest summary: {e}")
 
     # Determine exit code
     severity_order = {"low": 1, "medium": 2, "high": 3}
