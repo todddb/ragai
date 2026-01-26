@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 """
-tools/validate_crawl
+tools/validate_crawl.py
 
 Validate crawl artifacts and log results as a first-class job.
 
-Enhancements in this regenerated version:
+Features:
  - timezone-aware timestamps
  - evidence snippet for LOGIN_TEXT (first_match_snippet)
  - tightened suspicious patterns (fewer false positives)
  - MALFORMED_URL detection with evidence (original malformed url)
+ - DUPLICATE_URL detection across artifacts
  - safer logging / permission-handling when writing summary files
  - summarize / rollups (counts by code, top hosts)
- - --quarantine option: move flagged artifacts to data/artifacts_quarantine (attempts sudo when needed)
+ - --quarantine option: move flagged artifacts to data/quarantine
+ - --limit option: limit number of artifacts to validate (0 = all)
+ - --since option: only validate artifacts modified after timestamp
  - --json-out option: write summary also to specified path
+ - Writes validate_crawl_latest.json for API consumption
  - default locations: jobs -> data/logs/jobs, summary -> data/logs/summaries
 """
 
@@ -370,56 +374,123 @@ def validate_artifact(
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--artifacts-dir", default="data/artifacts")
-    ap.add_argument("--sample", type=int, default=15)
-    ap.add_argument("--all", action="store_true")
-    ap.add_argument("--seed", type=int)
-    ap.add_argument("--max-chunks", type=int, default=25)
-    ap.add_argument("--min-chunk-chars", type=int, default=40)
-    ap.add_argument("--repetition-threshold", type=float, default=0.30)
-    ap.add_argument("--fail-on", choices=["low", "medium", "high"], default="high")
-    ap.add_argument("--quarantine", action="store_true", help="move offending artifact dirs to data/artifacts_quarantine (uses sudo if necessary)")
-    ap.add_argument("--json-out", help="write summary JSON to this path in addition to default")
+    ap = argparse.ArgumentParser(description="Validate crawl artifacts for quality issues")
+    ap.add_argument("--artifacts-dir", default="data/artifacts", help="Directory containing artifacts")
+    ap.add_argument("--quarantine-dir", default="data/quarantine", help="Directory for quarantined artifacts")
+    ap.add_argument("--output-dir", default="data/logs/summaries", help="Directory for summary JSON files")
+    ap.add_argument("--limit", type=int, default=0, help="Max artifacts to validate (0 = no limit)")
+    ap.add_argument("--sample", type=int, default=0, help="Random sample size (0 = no sampling, use --all or --limit)")
+    ap.add_argument("--all", action="store_true", help="Validate all artifacts (default behavior when limit=0 and sample=0)")
+    ap.add_argument("--since", help="Only validate artifacts modified after this ISO timestamp")
+    ap.add_argument("--seed", type=int, help="Random seed for reproducible sampling")
+    ap.add_argument("--max-chunks", type=int, default=25, help="Max chunks to read per artifact")
+    ap.add_argument("--min-chunk-chars", type=int, default=40, help="Min chars for a chunk to not be 'tiny'")
+    ap.add_argument("--min-text-threshold", type=int, default=300, help="Min total text chars (LOW_TOTAL_TEXT threshold)")
+    ap.add_argument("--repetition-threshold", type=float, default=0.30, help="Repetition ratio threshold")
+    ap.add_argument("--fail-on", choices=["low", "medium", "high"], default="high", help="Exit code 1 if findings at this severity")
+    ap.add_argument("--quarantine", action="store_true", help="Move flagged artifacts to quarantine directory")
+    ap.add_argument("--json-out", help="Additional path to write summary JSON")
+    ap.add_argument("--verbose", action="store_true", help="Print more details")
     args = ap.parse_args()
 
-    job_id = f"validate_{uuid.uuid4()}"
+    job_id = f"validate_crawl_{uuid.uuid4()}"
     started = now_utc()
 
     # Log dirs
     jobs_dir = Path("data/logs/jobs")
-    summary_dir = Path("data/logs/summaries")
+    summary_dir = Path(args.output_dir)
+    quarantine_dir = Path(args.quarantine_dir)
     jobs_dir.mkdir(parents=True, exist_ok=True)
     summary_dir.mkdir(parents=True, exist_ok=True)
 
     job_log_path = jobs_dir / f"{job_id}.log"
     summary_path = summary_dir / f"{job_id}.json"
+    latest_path = summary_dir / "validate_crawl_latest.json"
 
     def log(msg: str):
         line = f"[{now_utc()}] {msg}"
         print(line)
         try:
-            job_log_path.open("a", encoding="utf-8").write(line + "\n")
+            with job_log_path.open("a", encoding="utf-8") as f:
+                f.write(line + "\n")
         except PermissionError:
             # best-effort: attempt sudo tee append
             try:
-                subprocess.run(["sudo", "tee", "-a", str(job_log_path)], input=(line + "\n").encode("utf-8"))
+                subprocess.run(["sudo", "tee", "-a", str(job_log_path)], input=(line + "\n").encode("utf-8"), check=False)
             except Exception:
                 pass
 
     log(f"Job started ({job_id})")
+    log(f"Artifacts dir: {args.artifacts_dir}")
+    log(f"Quarantine dir: {args.quarantine_dir}")
 
     artifact_root = Path(args.artifacts_dir)
-    artifact_dirs = sorted(p.parent for p in artifact_root.glob("*/artifact.json"))
+
+    # Collect all artifact directories with metadata
+    artifact_info = []
+    since_dt = None
+    if args.since:
+        try:
+            since_dt = datetime.fromisoformat(args.since.replace("Z", "+00:00"))
+        except ValueError:
+            log(f"Warning: could not parse --since timestamp '{args.since}', ignoring filter")
+
+    for artifact_json in artifact_root.glob("*/artifact.json"):
+        artifact_dir = artifact_json.parent
+        mtime = artifact_json.stat().st_mtime
+
+        # Filter by --since if specified
+        if since_dt:
+            mtime_dt = datetime.fromtimestamp(mtime, tz=timezone.utc)
+            if mtime_dt < since_dt:
+                continue
+
+        artifact_info.append((artifact_dir, mtime))
+
+    # Sort by mtime (newest first for limit mode)
+    artifact_info.sort(key=lambda x: x[1], reverse=True)
+    artifact_dirs = [info[0] for info in artifact_info]
 
     if not artifact_dirs:
         log("No artifacts found")
-        return 2
+        # Still write a summary even if no artifacts
+        empty_summary = {
+            "job_id": job_id,
+            "started_at": started,
+            "finished_at": now_utc(),
+            "artifacts_discovered": 0,
+            "artifacts_validated": 0,
+            "clean_artifacts": 0,
+            "finding_counts": {"low": 0, "medium": 0, "high": 0},
+            "findings": [],
+            "rollups": {"counts_by_code": {}, "counts_by_severity": {}, "top_hosts": {}},
+        }
+        try:
+            summary_path.write_text(json.dumps(empty_summary, indent=2), encoding="utf-8")
+            latest_path.write_text(json.dumps(empty_summary, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        return 0
 
     if args.seed is not None:
         random.seed(args.seed)
 
-    sample_dirs = artifact_dirs if args.all else random.sample(artifact_dirs, min(args.sample, len(artifact_dirs)))
+    # Determine which artifacts to validate
+    total_discovered = len(artifact_dirs)
+
+    if args.sample > 0:
+        # Random sampling mode
+        sample_dirs = random.sample(artifact_dirs, min(args.sample, len(artifact_dirs)))
+    elif args.limit > 0:
+        # Limit mode (take first N, which is newest due to mtime sort)
+        sample_dirs = artifact_dirs[:args.limit]
+    elif args.all or (args.sample == 0 and args.limit == 0):
+        # All mode (default when no sampling/limit specified)
+        sample_dirs = artifact_dirs
+    else:
+        sample_dirs = artifact_dirs
+
+    log(f"Found {total_discovered} artifact(s), validating {len(sample_dirs)}")
 
     suspicious = compile_patterns(DEFAULT_SUSPICIOUS_PATTERNS)
     bad_urls = compile_patterns(DEFAULT_BAD_URL_PATTERNS)
@@ -428,19 +499,70 @@ def main() -> int:
     clean = 0
     quarantined: List[str] = []
 
+    # Build URL-to-artifact mapping for duplicate detection
+    url_to_artifacts: Dict[str, List[Path]] = {}
+    for d in sample_dirs:
+        artifact_json = d / "artifact.json"
+        if artifact_json.exists():
+            try:
+                meta = load_json(artifact_json)
+                url = meta.get("url") or meta.get("source_url") or ""
+                if url:
+                    # Normalize URL for comparison (remove trailing slash, fragment)
+                    normalized = url.rstrip("/").split("#")[0]
+                    if normalized not in url_to_artifacts:
+                        url_to_artifacts[normalized] = []
+                    url_to_artifacts[normalized].append(d)
+            except Exception:
+                pass
+
+    # Find duplicate URLs
+    duplicate_urls = {url: dirs for url, dirs in url_to_artifacts.items() if len(dirs) > 1}
+
     for d in sample_dirs:
         fnds = validate_artifact(d, suspicious, bad_urls, args.max_chunks, args.min_chunk_chars, args.repetition_threshold)
+
+        # Check for duplicate URL
+        artifact_json = d / "artifact.json"
+        if artifact_json.exists():
+            try:
+                meta = load_json(artifact_json)
+                url = meta.get("url") or meta.get("source_url") or ""
+                doc_id = meta.get("doc_id") or meta.get("id") or d.name
+                if url:
+                    normalized = url.rstrip("/").split("#")[0]
+                    if normalized in duplicate_urls:
+                        other_dirs = [str(od) for od in duplicate_urls[normalized] if od != d]
+                        if other_dirs:
+                            fnds.append(
+                                Finding(
+                                    severity="medium",
+                                    code="DUPLICATE_URL",
+                                    message=f"URL also found in {len(other_dirs)} other artifact(s)",
+                                    doc_id=doc_id,
+                                    url=url,
+                                    artifact_dir=str(d),
+                                    evidence=", ".join(other_dirs[:3]),
+                                )
+                            )
+            except Exception:
+                pass
+
         if fnds:
             findings.extend(fnds)
-            log(f"Issues in {d.name}: {len(fnds)} finding(s)")
+            if args.verbose:
+                log(f"Issues in {d.name}: {len(fnds)} finding(s)")
             if args.quarantine:
-                dst_dir = "data/artifacts_quarantine"
-                ok = try_move_with_sudo(str(d), dst_dir)
-                if ok:
-                    quarantined.append(str(d))
-                    log(f"Quarantined {d.name} -> {dst_dir}")
-                else:
-                    log(f"Failed to quarantine {d.name} (permission error)")
+                # Only quarantine high-severity findings
+                has_high = any(f.severity == "high" for f in fnds)
+                if has_high:
+                    quarantine_dir.mkdir(parents=True, exist_ok=True)
+                    ok = try_move_with_sudo(str(d), str(quarantine_dir))
+                    if ok:
+                        quarantined.append(d.name)
+                        log(f"Quarantined {d.name} -> {quarantine_dir}")
+                    else:
+                        log(f"Failed to quarantine {d.name} (permission error)")
         else:
             clean += 1
 
@@ -448,11 +570,14 @@ def main() -> int:
     for f in findings:
         counts[f.severity] += 1
 
+    log(f"Validation complete: {clean} clean, {len(findings)} finding(s)")
+    log(f"  High: {counts['high']}, Medium: {counts['medium']}, Low: {counts['low']}")
+
     summary = {
         "job_id": job_id,
         "started_at": started,
         "finished_at": now_utc(),
-        "artifacts_discovered": len(artifact_dirs),
+        "artifacts_discovered": total_discovered,
         "artifacts_validated": len(sample_dirs),
         "clean_artifacts": clean,
         "finding_counts": counts,
@@ -466,34 +591,50 @@ def main() -> int:
     if quarantined:
         summary["quarantined"] = quarantined
 
+    summary_json = json.dumps(summary, indent=2)
+
     # Try write summary (permission-safe)
     try:
-        summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        summary_path.write_text(summary_json, encoding="utf-8")
         log(f"Summary written to {summary_path}")
     except PermissionError as e:
         log(f"ERROR: cannot write summary file ({summary_path}): {e}")
         # attempt sudo tee fallback
         try:
-            subprocess.run(["sudo", "tee", str(summary_path)], input=json.dumps(summary, indent=2).encode("utf-8"))
+            subprocess.run(["sudo", "tee", str(summary_path)], input=summary_json.encode("utf-8"), check=False)
             log(f"Summary written to {summary_path} (via sudo)")
+        except Exception as e2:
+            log(f"ERROR: sudo fallback failed: {e2}")
+
+    # Write validate_crawl_latest.json
+    try:
+        latest_path.write_text(summary_json, encoding="utf-8")
+        log(f"Latest summary written to {latest_path}")
+    except PermissionError as e:
+        log(f"ERROR: cannot write latest file ({latest_path}): {e}")
+        try:
+            subprocess.run(["sudo", "tee", str(latest_path)], input=summary_json.encode("utf-8"), check=False)
+            log(f"Latest summary written to {latest_path} (via sudo)")
         except Exception as e2:
             log(f"ERROR: sudo fallback failed: {e2}")
 
     if args.json_out:
         try:
-            Path(args.json_out).write_text(json.dumps(summary, indent=2), encoding="utf-8")
+            Path(args.json_out).write_text(summary_json, encoding="utf-8")
             log(f"Also wrote JSON output to {args.json_out}")
         except Exception as e:
             log(f"Could not write additional json-out {args.json_out}: {e}")
 
-    # Pretty rollup logs
-    log("Top finding codes:")
-    for k, v in rollups["counts_by_code"].items():
-        log(f"  {k}: {v}")
+    # Pretty rollup logs (only if verbose)
+    if args.verbose and rollups["counts_by_code"]:
+        log("Top finding codes:")
+        for k, v in rollups["counts_by_code"].items():
+            log(f"  {k}: {v}")
 
-    log("Top hosts:")
-    for k, v in rollups["top_hosts"].items():
-        log(f"  {k}: {v}")
+        if rollups["top_hosts"]:
+            log("Top hosts:")
+            for k, v in rollups["top_hosts"].items():
+                log(f"  {k}: {v}")
 
     fail = any(severity_at_least(f.severity, args.fail_on) for f in findings)
     log(f"Job completed (exit={'1' if fail else '0'})")

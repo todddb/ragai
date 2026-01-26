@@ -805,15 +805,32 @@ async def reset_all() -> Dict[str, Any]:
 async def validate_crawl() -> Dict[str, Any]:
     """Run crawl artifact validation and return summary."""
     SUMMARY_DIR.mkdir(parents=True, exist_ok=True)
-    summary_path = SUMMARY_DIR / "validate_ingest_latest.json"
+
+    # Run the crawl validator script
+    _run_validation(
+        [
+            "python",
+            "/app/tools/validate_crawl.py",
+            "--artifacts-dir",
+            "/app/data/artifacts",
+            "--quarantine-dir",
+            "/app/data/quarantine",
+            "--output-dir",
+            "/app/data/logs/summaries",
+            "--all",
+        ]
+    )
+
+    # Read the latest summary
+    summary_path = SUMMARY_DIR / "validate_crawl_latest.json"
     if not summary_path.is_file():
-        latest = _latest_summary("validate_ingest_")
+        latest = _latest_summary("validate_crawl_")
         if not latest or not latest.is_file():
-            raise HTTPException(status_code=404, detail="No ingest validation summary available")
+            raise HTTPException(status_code=500, detail="Crawl validation summary not found")
         summary_path = latest
 
     payload = json.loads(summary_path.read_text(encoding="utf-8"))
-    return _format_ingest_summary(payload)
+    return _format_crawl_summary(payload)
 
 
 @router.get("/validate/crawl/summary")
