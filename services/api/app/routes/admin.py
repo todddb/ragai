@@ -1132,6 +1132,7 @@ async def check_url(payload: Dict[str, Any]) -> Dict[str, Any]:
         "ingest": None,
         "qdrant": None,
     }
+    artifact_doc_id = None
 
     # Check artifacts
     artifacts_path = Path("/app/data/artifacts")
@@ -1146,6 +1147,11 @@ async def check_url(payload: Dict[str, Any]) -> Dict[str, Any]:
 
                 if artifact_url == url or artifact_data.get("final_url") == url:
                     artifact_dir = artifact_file.parent
+                    captured_at = (
+                        artifact_data.get("fetched_at")
+                        or artifact_data.get("captured_at")
+                        or artifact_data.get("timestamp")
+                    )
 
                     # Read content snippet
                     content_file = artifact_dir / "content.html"
@@ -1156,11 +1162,14 @@ async def check_url(payload: Dict[str, Any]) -> Dict[str, Any]:
 
                     found_artifacts.append({
                         "artifact_id": artifact_dir.name,
+                        "doc_id": artifact_data.get("doc_id"),
                         "url": artifact_data.get("url"),
                         "final_url": artifact_data.get("final_url"),
-                        "status_code": artifact_data.get("status_code"),
+                        "http_status": artifact_data.get("http_status") or artifact_data.get("status_code"),
+                        "auth_profile": artifact_data.get("auth_profile"),
                         "title": artifact_data.get("title"),
-                        "captured_at": artifact_data.get("timestamp"),
+                        "captured_at": captured_at,
+                        "content_hash": artifact_data.get("content_hash"),
                         "snippet": snippet,
                     })
             except Exception:
@@ -1169,6 +1178,7 @@ async def check_url(payload: Dict[str, Any]) -> Dict[str, Any]:
         if found_artifacts:
             # Sort by captured_at, most recent first
             found_artifacts.sort(key=lambda a: a.get("captured_at", ""), reverse=True)
+            artifact_doc_id = found_artifacts[0].get("doc_id")
             result["artifact"] = {
                 "found": True,
                 "count": len(found_artifacts),
@@ -1207,22 +1217,28 @@ async def check_url(payload: Dict[str, Any]) -> Dict[str, Any]:
         cursor = conn.cursor()
 
         # Find document by URL
-        cursor.execute("SELECT doc_id, url, ingested_at FROM documents WHERE url = ?", (url,))
+        cursor.execute(
+            "SELECT doc_id, url, ingested_at, chunk_count, content_hash FROM documents WHERE url = ?",
+            (url,),
+        )
         doc_row = cursor.fetchone()
 
         if doc_row:
-            doc_id, doc_url, ingested_at = doc_row
+            doc_id, doc_url, ingested_at, chunk_count, content_hash = doc_row
+            artifact_doc_id = artifact_doc_id or doc_id
 
             # Count chunks for this document
             cursor.execute("SELECT COUNT(*) FROM chunks WHERE doc_id = ?", (doc_id,))
-            chunk_count = cursor.fetchone()[0]
+            chunk_count_db = cursor.fetchone()[0]
 
             result["ingest"] = {
                 "found": True,
                 "doc_id": doc_id,
                 "url": doc_url,
-                "chunk_count": chunk_count,
+                "chunk_count": chunk_count_db,
+                "chunk_count_recorded": chunk_count,
                 "ingested_at": ingested_at,
+                "content_hash": content_hash,
             }
         else:
             result["ingest"] = {"found": False}
@@ -1240,17 +1256,40 @@ async def check_url(payload: Dict[str, Any]) -> Dict[str, Any]:
 
         client = QdrantClient(url=qdrant_host)
 
-        # Search by URL in payload
+        filters = []
+        if artifact_doc_id:
+            filters.append(
+                rest.FieldCondition(
+                    key="doc_id",
+                    match=rest.MatchValue(value=artifact_doc_id),
+                )
+            )
+        filters.append(
+            rest.FieldCondition(
+                key="url",
+                match=rest.MatchValue(value=url),
+            )
+        )
+        scroll_filter = rest.Filter(should=filters)
+        points_count = 0
+        try:
+            count_result = client.count(
+                collection_name=collection_name,
+                count_filter=scroll_filter,
+                exact=True,
+            )
+            points_count = count_result.count or 0
+        except Exception:
+            search_result = client.scroll(
+                collection_name=collection_name,
+                scroll_filter=scroll_filter,
+                limit=10,
+            )
+            points = search_result[0] if search_result else []
+            points_count = len(points)
         search_result = client.scroll(
             collection_name=collection_name,
-            scroll_filter=rest.Filter(
-                must=[
-                    rest.FieldCondition(
-                        key="url",
-                        match=rest.MatchValue(value=url),
-                    )
-                ]
-            ),
+            scroll_filter=scroll_filter,
             limit=10,
         )
 
@@ -1269,15 +1308,128 @@ async def check_url(payload: Dict[str, Any]) -> Dict[str, Any]:
 
             result["qdrant"] = {
                 "found": True,
-                "points_count": len(points),
+                "points_count": points_count,
                 "example_chunks": chunks,
             }
         else:
-            result["qdrant"] = {"found": False}
+            result["qdrant"] = {"found": False, "points_count": points_count}
     except Exception as e:
         result["qdrant"] = {"found": False, "error": str(e)}
 
     return result
+
+
+@router.post("/data/repair_url")
+async def repair_url(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Repair ingest state for a single URL by clearing metadata/vectors and re-queueing ingest."""
+    import sqlite3
+    from app.utils.config import load_config
+    from app.utils.redis_queue import push_job
+
+    url = payload.get("url")
+    if not url:
+        raise HTTPException(status_code=400, detail="Missing 'url' field")
+
+    artifacts_path = Path("/app/data/artifacts")
+    artifact_match = None
+    artifact_candidates = []
+    if artifacts_path.exists():
+        for artifact_file in artifacts_path.glob("*/artifact.json"):
+            try:
+                artifact_data = json.loads(artifact_file.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            artifact_url = artifact_data.get("url")
+            if artifact_url == url or artifact_data.get("final_url") == url:
+                captured_at = (
+                    artifact_data.get("fetched_at")
+                    or artifact_data.get("captured_at")
+                    or artifact_data.get("timestamp")
+                )
+                captured_ts = None
+                if isinstance(captured_at, (int, float)):
+                    captured_ts = float(captured_at)
+                elif isinstance(captured_at, str):
+                    try:
+                        captured_ts = datetime.fromisoformat(captured_at.replace("Z", "+00:00")).timestamp()
+                    except Exception:
+                        captured_ts = None
+                if captured_ts is None:
+                    captured_ts = artifact_file.stat().st_mtime
+                artifact_candidates.append({
+                    "artifact_file": artifact_file,
+                    "artifact_dir": artifact_file.parent,
+                    "doc_id": artifact_data.get("doc_id"),
+                    "captured_at": captured_at,
+                    "captured_ts": captured_ts,
+                })
+
+    if artifact_candidates:
+        artifact_match = max(artifact_candidates, key=lambda a: a["captured_ts"])
+
+    if not artifact_match:
+        raise HTTPException(status_code=404, detail="No artifact found for URL")
+
+    doc_id = artifact_match["doc_id"]
+    cleared = {"documents": 0, "chunks": 0, "qdrant": False}
+    ensure_metadata_db_initialized()
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        if not doc_id:
+            cursor.execute("SELECT doc_id FROM documents WHERE url = ?", (url,))
+            row = cursor.fetchone()
+            if row:
+                doc_id = row[0]
+        if doc_id:
+            cursor.execute("SELECT COUNT(*) FROM chunks WHERE doc_id = ?", (doc_id,))
+            cleared["chunks"] = cursor.fetchone()[0]
+            cursor.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
+            cursor.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
+            cleared["documents"] = cursor.rowcount
+            conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+    try:
+        system_config = load_config("system")
+        qdrant_config = system_config.get("qdrant", {})
+        qdrant_host = qdrant_config.get("host")
+        collection_name = qdrant_config.get("collection", "ragai_chunks")
+        client = QdrantClient(url=qdrant_host)
+        client.delete(
+            collection_name=collection_name,
+            points_selector=rest.Filter(
+                must=[rest.FieldCondition(key="doc_id", match=rest.MatchValue(value=doc_id))]
+            ),
+        )
+        cleared["qdrant"] = True
+    except Exception:
+        cleared["qdrant"] = False
+
+    if not doc_id:
+        raise HTTPException(status_code=404, detail="No doc_id found for URL")
+
+    job_id = f"job_{int(datetime.utcnow().timestamp())}_{uuid.uuid4().hex[:6]}"
+    job = {
+        "job_id": job_id,
+        "type": "ingest",
+        "artifact_paths": [str(artifact_match["artifact_file"])],
+        "chunks_estimate": 0,
+        "meta": {"repair_url": url, "doc_id": doc_id},
+    }
+    await push_job(job)
+
+    return {
+        "status": "queued",
+        "url": url,
+        "doc_id": doc_id,
+        "artifact_id": artifact_match["artifact_dir"].name,
+        "cleared": cleared,
+        "job_id": job_id,
+    }
 
 
 @router.post("/data/search")

@@ -12,6 +12,7 @@ import httpx
 import redis.asyncio as aioredis
 import yaml
 from qdrant_client import QdrantClient
+from qdrant_client.http import models as rest
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -80,6 +81,41 @@ def _filter_chunks(chunks: List[Dict]) -> Tuple[List[Dict], Dict[str, int]]:
             continue
         kept.append(chunk)
     return kept, skipped_counts
+
+
+def _qdrant_has_points(
+    client: QdrantClient, collection: str, doc_id: str, url: str
+) -> bool:
+    conditions = []
+    if doc_id:
+        conditions.append(
+            rest.FieldCondition(key="doc_id", match=rest.MatchValue(value=doc_id))
+        )
+    if url:
+        conditions.append(rest.FieldCondition(key="url", match=rest.MatchValue(value=url)))
+    if not conditions:
+        return False
+    if len(conditions) == 1:
+        point_filter = rest.Filter(must=conditions)
+    else:
+        point_filter = rest.Filter(should=conditions)
+    try:
+        count_result = client.count(
+            collection_name=collection,
+            count_filter=point_filter,
+            exact=True,
+        )
+        return (count_result.count or 0) > 0
+    except Exception:
+        try:
+            points, _ = client.scroll(
+                collection_name=collection,
+                scroll_filter=point_filter,
+                limit=1,
+            )
+            return len(points) > 0
+        except Exception:
+            return False
 
 
 def _doc_ids_on_disk() -> Set[str]:
@@ -232,38 +268,53 @@ async def process_job(redis: aioredis.Redis, job: dict):
 
                         # Check if document needs updating
                         row = conn.execute(
-                            "SELECT content_hash FROM documents WHERE doc_id = ?", (doc_id,)
+                            "SELECT content_hash, chunk_count FROM documents WHERE doc_id = ?",
+                            (doc_id,),
                         ).fetchone()
                         if row and row["content_hash"] == content_hash:
-                            # Skip unchanged
+                            qdrant_has_points = _qdrant_has_points(
+                                qdrant_client, collection, doc_id, url
+                            )
+                            if row["chunk_count"] and row["chunk_count"] > 0 and qdrant_has_points:
+                                # Skip unchanged
+                                await publish_log(
+                                    redis,
+                                    job_id,
+                                    f"Skipped unchanged artifact {idx}/{total_artifacts}: {url}",
+                                )
+                                done += 1
+                                await redis.hset(
+                                    job_key,
+                                    mapping={
+                                        "done": done,
+                                        "done_artifacts": done,
+                                        "current_artifact": url or str(artifact_path),
+                                        "updated_at": _utcnow(),
+                                    },
+                                )
+                                await publish_event(
+                                    redis,
+                                    job_id,
+                                    {
+                                        "type": "artifact_progress",
+                                        "done_artifacts": done,
+                                        "total_artifacts": total_artifacts,
+                                        "current_artifact": url or str(artifact_path),
+                                        "errors": errors,
+                                        "status": "running",
+                                    },
+                                )
+                                continue
+                            delete_by_doc_id(qdrant_client, collection, doc_id)
+                            conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
+                            conn.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
                             await publish_log(
                                 redis,
                                 job_id,
-                                f"Skipped unchanged artifact {idx}/{total_artifacts}: {url}",
+                                f"Repairing partial ingest for {url} doc_id={doc_id} "
+                                f"chunk_count={row['chunk_count']} qdrant_points={qdrant_has_points}",
                             )
-                            done += 1
-                            await redis.hset(
-                                job_key,
-                                mapping={
-                                    "done": done,
-                                    "done_artifacts": done,
-                                    "current_artifact": url or str(artifact_path),
-                                    "updated_at": _utcnow(),
-                                },
-                            )
-                            await publish_event(
-                                redis,
-                                job_id,
-                                {
-                                    "type": "artifact_progress",
-                                    "done_artifacts": done,
-                                    "total_artifacts": total_artifacts,
-                                    "current_artifact": url or str(artifact_path),
-                                    "errors": errors,
-                                    "status": "running",
-                                },
-                            )
-                            continue
+                            row = None
 
                         # If updating, clear previous data
                         if row:
@@ -291,18 +342,13 @@ async def process_job(redis: aioredis.Redis, job: dict):
                         )
 
                         if kept_chunks == 0:
-                            # No chunks to insert
-                            conn.execute(
-                                "INSERT INTO documents (doc_id, url, content_hash, ingested_at, chunk_count) VALUES (?, ?, ?, ?, ?)",
-                                (
-                                    doc_id,
-                                    artifact["url"],
-                                    content_hash,
-                                    _utcnow(),
-                                    0,
-                                ),
+                            # No chunks to insert; skip metadata insert so it can be retried later
+                            await publish_log(
+                                redis,
+                                job_id,
+                                f"Skipped artifact {idx}/{total_artifacts}: {url} (no kept chunks)",
+                                level="warning",
                             )
-                            conn.commit()
                             done += 1
                             await redis.hset(
                                 job_key,

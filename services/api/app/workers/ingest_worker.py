@@ -188,6 +188,41 @@ def _doc_ids_on_disk() -> Set[str]:
     return {path.parent.name for path in ARTIFACT_DIR.glob("*/artifact.json")}
 
 
+def _qdrant_has_points(
+    client: QdrantClient, collection: str, doc_id: str, url: str
+) -> bool:
+    conditions = []
+    if doc_id:
+        conditions.append(
+            rest.FieldCondition(key="doc_id", match=rest.MatchValue(value=doc_id))
+        )
+    if url:
+        conditions.append(rest.FieldCondition(key="url", match=rest.MatchValue(value=url)))
+    if not conditions:
+        return False
+    if len(conditions) == 1:
+        point_filter = rest.Filter(must=conditions)
+    else:
+        point_filter = rest.Filter(should=conditions)
+    try:
+        count_result = client.count(
+            collection_name=collection,
+            count_filter=point_filter,
+            exact=True,
+        )
+        return (count_result.count or 0) > 0
+    except Exception:
+        try:
+            points, _ = client.scroll(
+                collection_name=collection,
+                scroll_filter=point_filter,
+                limit=1,
+            )
+            return len(points) > 0
+        except Exception:
+            return False
+
+
 def run_ingest_job(log, job_id: str = None) -> None:
     try:
         system_config = _load_config(CONFIG_PATH)
@@ -226,10 +261,23 @@ def run_ingest_job(log, job_id: str = None) -> None:
             doc_id = artifact["doc_id"]
             content_hash = artifact["content_hash"]
             row = conn.execute(
-                "SELECT content_hash FROM documents WHERE doc_id = ?", (doc_id,)
+                "SELECT content_hash, chunk_count FROM documents WHERE doc_id = ?",
+                (doc_id,),
             ).fetchone()
             if row and row["content_hash"] == content_hash:
-                continue
+                qdrant_has_points = _qdrant_has_points(
+                    client, collection, doc_id, artifact.get("url", "")
+                )
+                if row["chunk_count"] and row["chunk_count"] > 0 and qdrant_has_points:
+                    continue
+                _delete_by_doc_id(client, collection, doc_id)
+                conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
+                conn.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
+                log(
+                    f"Repairing partial ingest for {doc_id} "
+                    f"chunk_count={row['chunk_count']} qdrant_points={qdrant_has_points}"
+                )
+                row = None
             if row:
                 _delete_by_doc_id(client, collection, doc_id)
                 conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
@@ -239,6 +287,9 @@ def run_ingest_job(log, job_id: str = None) -> None:
             chunks = []
             for line in chunks_path.read_text(encoding="utf-8").splitlines():
                 chunks.append(json.loads(line))
+            if not chunks:
+                log(f"Skipping {doc_id} (no chunks found)")
+                continue
             texts = [chunk["text"] for chunk in chunks]
             vectors = _load_embeddings(texts, ollama_host, embedding_model)
             # Generate deterministic UUID for Qdrant point IDs (not chunk_id strings)

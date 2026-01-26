@@ -2247,6 +2247,37 @@ async function checkUrl() {
   }
 }
 
+async function repairUrl() {
+  const input = document.getElementById('checkUrlInput');
+  const url = input?.value.trim();
+  if (!url) {
+    setStatus('checkUrlStatus', 'Please enter a URL', 'error');
+    return;
+  }
+
+  setStatus('checkUrlStatus', 'Repairing URL...');
+
+  try {
+    const resp = await fetch(`${API_BASE}/api/admin/data/repair_url`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+
+    if (!resp.ok) {
+      const errorText = await resp.text();
+      setStatus('checkUrlStatus', `Repair failed: ${errorText}`, 'error');
+      return;
+    }
+
+    const result = await resp.json();
+    setStatus('checkUrlStatus', `Repair queued (job ${result.job_id})`, 'success');
+    await checkUrl();
+  } catch (err) {
+    setStatus('checkUrlStatus', `Error: ${err.message}`, 'error');
+  }
+}
+
 function renderCheckUrlResults(result) {
   const resultsDiv = document.getElementById('checkUrlResults');
   if (!resultsDiv) return;
@@ -2262,8 +2293,10 @@ function renderCheckUrlResults(result) {
       <div style="font-size: 0.85rem; margin-top: 4px;">
         <strong>ID:</strong> ${escapeHtml(a.artifact_id)}<br>
         <strong>Title:</strong> ${escapeHtml(a.title || 'N/A')}<br>
-        <strong>Status:</strong> ${a.status_code || 'N/A'}<br>
+        <strong>Status:</strong> ${a.http_status || 'N/A'}<br>
         <strong>Captured:</strong> ${a.captured_at ? new Date(a.captured_at).toLocaleString() : 'N/A'}<br>
+        <strong>Auth Profile:</strong> ${escapeHtml(a.auth_profile || 'N/A')}<br>
+        <strong>Content Hash:</strong> ${escapeHtml(a.content_hash || 'N/A')}<br>
         ${a.snippet ? `<div style="margin-top: 4px; padding: 4px; background: var(--bg-secondary); border-radius: 4px; font-family: monospace; font-size: 0.75rem; max-height: 100px; overflow-y: auto;">${escapeHtml(a.snippet)}</div>` : ''}
       </div>
     `;
@@ -2294,7 +2327,9 @@ function renderCheckUrlResults(result) {
       <div style="font-size: 0.85rem; margin-top: 4px;">
         <strong>Doc ID:</strong> ${escapeHtml(i.doc_id)}<br>
         <strong>Chunks:</strong> ${i.chunk_count || 0}<br>
-        <strong>Ingested:</strong> ${i.ingested_at ? new Date(i.ingested_at).toLocaleString() : 'N/A'}
+        <strong>Recorded Chunks:</strong> ${i.chunk_count_recorded || 0}<br>
+        <strong>Ingested:</strong> ${i.ingested_at ? new Date(i.ingested_at).toLocaleString() : 'N/A'}<br>
+        <strong>Content Hash:</strong> ${escapeHtml(i.content_hash || 'N/A')}
       </div>
     `;
   } else {
@@ -3290,6 +3325,7 @@ document.getElementById('refreshHealthBtn')?.addEventListener('click', loadPipel
 
 // Wire up Check Data event listeners
 document.getElementById('checkUrlBtn')?.addEventListener('click', checkUrl);
+document.getElementById('repairUrlBtn')?.addEventListener('click', repairUrl);
 document.getElementById('checkUrlInput')?.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
     event.preventDefault();
