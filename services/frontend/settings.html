@@ -454,12 +454,12 @@
             <div class="panel-card" id="dataValidationPanel">
               <h4>Validate Crawl Artifacts</h4>
               <p class="settings-help">
-                Validate stored crawl artifacts, flag suspicious entries, and optionally quarantine them. Quarantined artifacts move to <code>data/quarantine/</code> and can be restored manually.
+                This tool validates stored crawl artifacts and highlights entries that look unusable (login pages, malformed artifacts, or pages with too little text). Flagged items can be moved to quarantine so they will be skipped during ingestion and won't be added to the vector database. Quarantining is reversible — you can restore items later or fix the site and re-crawl. Use the "Quarantine Selected" button to move multiple items at once, or the per-row "Quarantine" button to move a single artifact.
               </p>
               <div class="actions-row">
                 <button class="btn btn-primary" id="validateArtifactsBtn">Validate Crawl</button>
                 <button class="btn" id="refreshValidationBtn">Refresh Summary</button>
-                <button class="btn btn-danger" id="quarantineSelectedBtn">Quarantine Selected</button>
+                <button class="btn btn-warning" id="quarantineSelectedBtn" title="Move selected artifacts to quarantine folder. Quarantined items won't be ingested but can be restored later.">Quarantine Selected</button>
                 <span id="dataValidationStatus" class="status-text"></span>
               </div>
 
