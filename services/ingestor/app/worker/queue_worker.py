@@ -26,7 +26,7 @@ CONFIG_PATH = Path("/app/config/system.yml")
 INGEST_CONFIG_PATH = Path("/app/config/ingest.yml")
 HEARTBEAT_KEY = "ingest_worker:heartbeat"
 WORKER_INFO_KEY = "ingest_worker:info"
-WORKER_VERSION = "1"
+WORKER_VERSION = "2"  # Bumped for Qdrant client fix
 
 # Boilerplate filters (same as ingest.py)
 BOILERPLATE_KEYWORDS = {
@@ -133,10 +133,29 @@ async def process_job(redis: aioredis.Redis, job: dict):
         embedding_model = system_config["ollama"]["embedding_model"]
         ollama_host = system_config["ollama"]["host"]
 
-        # Initialize Qdrant client
-        client = QdrantClient(url=qdrant_host)
+        # Initialize Qdrant client (named distinctly to avoid confusion with HTTP client)
+        qdrant_client = QdrantClient(url=qdrant_host)
+
+        # Startup diagnostics: log Qdrant client info
+        print(f"[QDRANT] URL: {qdrant_host}")
+        print(f"[QDRANT] Client class: {type(qdrant_client).__name__}")
+        print(f"[QDRANT] hasattr(client, 'upsert'): {hasattr(qdrant_client, 'upsert')}")
+        sys.stdout.flush()
+        await publish_log(redis, job_id, f"Qdrant client initialized: url={qdrant_host}, class={type(qdrant_client).__name__}")
+
+        # Fail-fast: verify Qdrant is reachable before processing
+        try:
+            collections_check = qdrant_client.get_collections()
+            await publish_log(redis, job_id, f"Qdrant reachable: {len(collections_check.collections)} collection(s) found")
+        except Exception as qdrant_err:
+            error_msg = f"Qdrant unreachable at {qdrant_host}: {repr(qdrant_err)}"
+            print(f"[QDRANT] FAIL-FAST: {error_msg}")
+            sys.stdout.flush()
+            await publish_log(redis, job_id, error_msg, level="error")
+            raise RuntimeError(error_msg) from qdrant_err
+
         vector_size = len(embed_text(ollama_host, embedding_model, "dimension probe"))
-        ensure_collection(client, collection, vector_size=vector_size)
+        ensure_collection(qdrant_client, collection, vector_size=vector_size)
 
         # Ensure ingest metadata database schema is initialized
         init_db()
@@ -152,7 +171,7 @@ async def process_job(redis: aioredis.Redis, job: dict):
             }
             missing_doc_ids = stored_doc_ids - disk_doc_ids
             for doc_id in missing_doc_ids:
-                delete_by_doc_id(client, collection, doc_id)
+                delete_by_doc_id(qdrant_client, collection, doc_id)
                 conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
                 conn.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
                 await publish_log(redis, job_id, f"Deleted vectors for missing doc_id {doc_id}")
@@ -193,7 +212,7 @@ async def process_job(redis: aioredis.Redis, job: dict):
             # Process each artifact
             done = 0
             errors = 0
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=60.0) as http_client:
                 for idx, artifact_path in enumerate(artifact_paths, start=1):
                     try:
                         # Check for cancellation
@@ -248,7 +267,7 @@ async def process_job(redis: aioredis.Redis, job: dict):
 
                         # If updating, clear previous data
                         if row:
-                            delete_by_doc_id(client, collection, doc_id)
+                            delete_by_doc_id(qdrant_client, collection, doc_id)
                             conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
                             conn.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
 
@@ -334,7 +353,7 @@ async def process_job(redis: aioredis.Redis, job: dict):
                         ) -> Tuple[int, List[List[float]]]:
                             async with semaphore:
                                 embeddings = await embed_texts_async(
-                                    client, ollama_host, embedding_model, batch_texts
+                                    http_client, ollama_host, embedding_model, batch_texts
                                 )
                             return batch_index, embeddings
 
@@ -395,7 +414,7 @@ async def process_job(redis: aioredis.Redis, job: dict):
                             f"(batch_size={ingest_config['upsert_batch_size']})...",
                         )
                         upsert_vectors(
-                            client,
+                            qdrant_client,
                             collection,
                             ids,
                             vectors,

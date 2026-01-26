@@ -13,4 +13,6 @@ RUN mkdir -p /ms-playwright \
 
 COPY app /app/app
 
+# Note: tools directory is mounted via docker-compose volume: ./tools:/app/tools:ro
+
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -840,10 +840,17 @@ async def get_crawl_summary() -> Dict[str, Any]:
     if not summary_path.is_file():
         latest = _latest_summary("validate_crawl_")
         if not latest or not latest.is_file():
-            raise HTTPException(
-                status_code=404,
-                detail="No crawl validation summary available"
-            )
+            # Return empty status instead of 404 for better UI handling
+            return {
+                "status": "empty",
+                "summary": {
+                    "total": 0,
+                    "flagged": 0,
+                    "quarantined": 0,
+                },
+                "validated": [],
+                "raw": None,
+            }
         summary_path = latest
 
     payload = json.loads(summary_path.read_text(encoding="utf-8"))
