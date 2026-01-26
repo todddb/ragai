@@ -119,6 +119,16 @@ header {
   background: #DC2626;
 }
 
+.btn-warning {
+  background: var(--status-warning);
+  color: var(--bg-white);
+  border-color: var(--status-warning);
+}
+
+.btn-warning:hover {
+  background: #D97706;
+}
+
 .nav-icon {
   width: 40px;
   height: 40px;
@@ -1571,7 +1581,7 @@ html.sidebar-collapsed .sidebar #sidebarToggle {
 
 .validation-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   padding: var(--spacing-sm);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
@@ -1585,4 +1595,21 @@ html.sidebar-collapsed .sidebar #sidebarToggle {
 
 .validation-checkbox {
   cursor: pointer;
+}
+
+.validation-row .validation-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.validation-row .validation-severity {
+  min-width: 80px;
+  text-align: right;
+  align-self: flex-start;
+  padding-top: 2px;
+}
+
+.validation-row .validation-actions {
+  min-width: 100px;
+  text-align: right;
 }

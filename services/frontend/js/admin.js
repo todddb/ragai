@@ -2660,18 +2660,19 @@ function renderValidationList(list = []) {
 function createValidationRow(item) {
   const row = document.createElement('div');
   row.className = 'validation-row';
+  row.dataset.artifactId = item.id;
   row.innerHTML = `
-    <div style="display:flex; gap:12px; align-items:center;">
-      <input type="checkbox" class="validation-checkbox" data-artifact-id="${item.id}" />
-      <div style="flex:1">
-        <div style="font-weight:600;">${escapeHtml(item.url || item.title || item.id)}</div>
+    <div style="display:flex; gap:12px; align-items:flex-start; width:100%;">
+      <input type="checkbox" class="validation-checkbox" data-artifact-id="${item.id}" style="margin-top:4px;" />
+      <div class="validation-meta" style="flex:1; min-width:0;">
+        <div style="font-weight:600; word-break:break-word;">${escapeHtml(item.url || item.title || item.id)}</div>
         <div style="font-size:0.85rem;color:var(--text-secondary);margin-top:2px;">${escapeHtml(item.reason || '')}</div>
       </div>
-      <div style="min-width:140px; text-align:right;">
-        <div style="font-weight:600; text-transform: uppercase; color: ${getSeverityColor(item.severity)};">${item.severity || '—'}</div>
-        <div class="actions-row" style="margin-top:6px;">
-          <button class="btn btn-small" data-action="quarantine" data-id="${item.id}">Quarantine</button>
-        </div>
+      <div class="validation-severity" style="min-width:80px; text-align:right;">
+        <div style="font-weight:600; text-transform:uppercase; color:${getSeverityColor(item.severity)};">${item.severity || '—'}</div>
+      </div>
+      <div class="validation-actions" style="min-width:100px; text-align:right;">
+        <button class="btn btn-small" data-action="quarantine" data-id="${item.id}">Quarantine</button>
       </div>
     </div>
   `;
@@ -2679,7 +2680,10 @@ function createValidationRow(item) {
   // Wire up quarantine button
   const quarantineBtn = row.querySelector('button[data-action="quarantine"]');
   if (quarantineBtn) {
-    quarantineBtn.addEventListener('click', async () => {
+    quarantineBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const confirmed = confirm('Move this artifact to quarantine? This is reversible — you can restore it manually later.');
+      if (!confirmed) return;
       await quarantineArtifacts([item.id]);
     });
   }
@@ -2709,7 +2713,10 @@ function updateSelectedValidationCount() {
 }
 
 async function quarantineArtifacts(ids = []) {
-  if (!ids.length) return;
+  if (!ids.length) {
+    setStatus('dataValidationStatus', 'No artifacts selected.', 'error');
+    return;
+  }
   const statusTarget = 'dataValidationStatus';
   setStatus(statusTarget, `Quarantining ${ids.length} artifact(s)...`);
   try {
@@ -2723,25 +2730,43 @@ async function quarantineArtifacts(ids = []) {
       return;
     }
     const result = await resp.json();
-    // assume server returns list of quarantined ids
-    const quarantined = result.quarantined || ids;
-    // update UI rows
+    const quarantined = result.quarantined || [];
+    const missing = result.missing || [];
+
+    // Remove quarantined rows from DOM with animation
     quarantined.forEach(id => {
-      const checkbox = document.querySelector(`.validation-checkbox[data-artifact-id="${id}"]`);
-      if (checkbox) {
-        const row = checkbox.closest('.validation-row');
-        if (row) {
-          row.style.opacity = '0.5';
-          const tag = document.createElement('span');
-          tag.className = 'status-pill';
-          tag.textContent = 'Quarantined';
-          row.appendChild(tag);
-        }
+      const row = document.querySelector(`.validation-row[data-artifact-id="${id}"]`);
+      if (row) {
+        row.style.transition = 'opacity 0.3s, transform 0.3s';
+        row.style.opacity = '0';
+        row.style.transform = 'translateX(20px)';
+        setTimeout(() => row.remove(), 300);
       }
     });
-    setStatus(statusTarget, `Quarantined ${quarantined.length} artifact(s)`, 'success');
-    // refresh summary
-    await loadDataValidation();
+
+    // Update validationState.allItems to remove quarantined items
+    validationState.allItems = validationState.allItems.filter(item => !quarantined.includes(item.id));
+
+    // Clear select all checkbox and update count
+    const selectAll = document.getElementById('selectAllValidation');
+    if (selectAll) selectAll.checked = false;
+    setTimeout(() => {
+      updateSelectedValidationCount();
+    }, 350);
+
+    // Build status message
+    let statusMsg = `Quarantined ${quarantined.length} artifact(s).`;
+    if (missing.length > 0) {
+      statusMsg += ` ${missing.length} not found: ${missing.slice(0, 3).join(', ')}${missing.length > 3 ? '...' : ''}`;
+      setStatus(statusTarget, statusMsg, 'error');
+    } else {
+      setStatus(statusTarget, statusMsg, 'success');
+    }
+
+    // Refresh summary counts after a short delay to allow DOM updates
+    setTimeout(async () => {
+      await loadDataValidation();
+    }, 400);
   } catch (err) {
     setStatus(statusTarget, `Error: ${err.message}`, 'error');
   }
@@ -3285,7 +3310,15 @@ document.getElementById('refreshValidationBtn')?.addEventListener('click', loadD
 document.getElementById('quarantineSelectedBtn')?.addEventListener('click', async () => {
   const checkboxes = Array.from(document.querySelectorAll('.validation-checkbox:checked'));
   const ids = checkboxes.map(cb => cb.dataset.artifactId);
-  if (!ids.length) return setStatus('dataValidationStatus', 'No artifacts selected', 'error');
+  if (!ids.length) {
+    setStatus('dataValidationStatus', 'No artifacts selected.', 'error');
+    return;
+  }
+  const confirmed = confirm(
+    `Move ${ids.length} artifact(s) to quarantine?\n\n` +
+    'This is reversible — quarantined items can be restored manually later.'
+  );
+  if (!confirmed) return;
   await quarantineArtifacts(ids);
 });
 document.getElementById('selectAllValidation')?.addEventListener('change', (event) => {
