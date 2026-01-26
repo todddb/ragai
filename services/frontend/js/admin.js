@@ -2409,8 +2409,8 @@ async function loadDataValidation() {
     const resp = await fetch(`${API_BASE}/api/admin/validate/crawl/summary`);
     if (!resp.ok) {
       if (resp.status === 404) {
-        setStatus(statusTarget, 'No crawl validation summary yet. Run validation to generate one.', 'error');
-        renderValidationSummary({});
+        setStatus(statusTarget, 'No crawl validation has been run yet.', 'error');
+        renderValidationSummary({}, null);
         renderValidationList([]);
         return;
       }
@@ -2419,7 +2419,14 @@ async function loadDataValidation() {
       return;
     }
     const payload = await resp.json();
-    renderValidationSummary(payload.summary);
+    // Handle empty status response
+    if (payload.status === 'empty') {
+      setStatus(statusTarget, 'No crawl validation has been run yet.', 'error');
+      renderValidationSummary({}, null);
+      renderValidationList([]);
+      return;
+    }
+    renderValidationSummary(payload.summary, payload.raw);
     renderValidationList(payload.validated || []);
     setStatus(statusTarget, 'Loaded', 'success');
   } catch (err) {
@@ -2440,7 +2447,7 @@ async function validateArtifacts() {
       return;
     }
     const result = await resp.json();
-    renderValidationSummary(result.summary);
+    renderValidationSummary(result.summary, result.raw);
     renderValidationList(result.validated || []);
     setStatus(statusTarget, 'Validation complete', 'success');
   } catch (err) {
@@ -2450,21 +2457,36 @@ async function validateArtifacts() {
   }
 }
 
-function renderValidationSummary(summary = {}) {
+function renderValidationSummary(summary = {}, raw = null) {
   const el = document.getElementById('validationSummary');
   if (!el) return;
+  // Use raw crawl validator fields if available, fallback to formatted summary
+  const discovered = raw?.artifacts_discovered ?? summary.total ?? 0;
+  const validated = raw?.artifacts_validated ?? summary.total ?? 0;
+  const flagged = summary.flagged || 0;
+  const quarantined = summary.quarantined || 0;
+  const clean = raw?.clean_artifacts ?? (validated - flagged);
+
   el.innerHTML = `
     <div>
-      <div class="field-label">Total examined</div>
-      <div class="info-value">${summary.total || 0}</div>
+      <div class="field-label">Artifacts Discovered</div>
+      <div class="info-value">${discovered}</div>
+    </div>
+    <div>
+      <div class="field-label">Artifacts Validated</div>
+      <div class="info-value">${validated}</div>
+    </div>
+    <div>
+      <div class="field-label">Clean</div>
+      <div class="info-value">${clean}</div>
     </div>
     <div>
       <div class="field-label">Flagged</div>
-      <div class="info-value">${summary.flagged || 0}</div>
+      <div class="info-value">${flagged}</div>
     </div>
     <div>
       <div class="field-label">Quarantined</div>
-      <div class="info-value">${summary.quarantined || 0}</div>
+      <div class="info-value">${quarantined}</div>
     </div>
   `;
 }
