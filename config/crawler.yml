@@ -13,9 +13,6 @@ url_canonicalization:
 playwright:
   enabled: true
   auth_profiles:
-    default:
-      storage_state_path: secrets/playwright/default-storageState.json
-      use_for_domains: []
     policy_cas:
       storage_state_path: secrets/playwright/policy-byu-storageState.json
       use_for_domains:

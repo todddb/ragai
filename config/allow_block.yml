@@ -6,7 +6,6 @@ seed_urls:
 - url: https://purchasing.byu.edu/
   allow_http: false
 blocked_domains:
-- cas.byu.edu
 - login.byu.edu
 allow_rules:
 - pattern: https://policy.byu.edu/
@@ -17,9 +16,10 @@ allow_rules:
     docx: false
     xlsx: false
     pptx: false
-  playwright: false
+  playwright: true
   allow_http: false
   auth_profile: policy_cas
+  id: 6614ea6d-90ac-4dce-bc09-1ea44920e6eb
 - pattern: https://hrs.byu.edu/procedures/
   match: prefix
   types:
@@ -31,6 +31,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: policy_cas
+  id: 6a64012e-23d1-4d18-839e-f3b93ee89fd7
 - pattern: https://incident.byu.edu/forms/
   match: prefix
   types:
@@ -42,6 +43,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: 9e9a0488-eff0-4bda-b2a8-1742399b3411
 - pattern: https://risk.byu.edu/fire/
   match: prefix
   types:
@@ -53,6 +55,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: 74ec3c32-007e-4552-b46c-478e40d70633
 - pattern: https://housing.byu.edu/secure/
   match: prefix
   types:
@@ -64,6 +67,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: fa59f94c-3562-4e0f-a911-5ad58fc269c1
 - pattern: https://compliance.byu.edu/
   match: prefix
   types:
@@ -75,6 +79,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: 32849994-feef-4dec-8d02-b0c80295864d
 - pattern: https://styleguide.byu.edu/brand-guidelines/
   match: prefix
   types:
@@ -86,6 +91,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: a1685443-7fc9-494f-8b9a-29369ebe8c32
 - pattern: https://deanofstudents.byu.edu/
   match: prefix
   types:
@@ -97,6 +103,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: 102a1504-8ad3-42a3-a63a-1856f33d6ee7
 - pattern: https://honorcode.byu.edu/
   match: prefix
   types:
@@ -108,6 +115,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: a273b86f-e156-4592-b2f3-35bf4eac08ea
 - pattern: https://avp.byu.edu/
   match: prefix
   types:
@@ -119,6 +127,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: 9d753749-4333-4193-83ce-bafddab876ba
 - pattern: https://www.dmba.com/
   match: prefix
   types:
@@ -130,6 +139,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: a5d1b3e1-307f-45c5-b6f4-1ef52bc68b3d
 - pattern: https://speeches.byu.edu/topics/
   match: prefix
   types:
@@ -141,6 +151,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: 36311af1-f4be-4f7a-86ca-7eee7aeb64e0
 - pattern: https://enrollment.byu.edu/
   match: prefix
   types:
@@ -152,6 +163,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: 2c086f04-1cd6-4e44-8bf6-7e1947366b15
 - pattern: https://speeches.byu.edu/talks/
   match: prefix
   types:
@@ -163,6 +175,7 @@ allow_rules:
   playwright: false
   allow_http: false
   auth_profile: null
+  id: 13d25bf3-f846-4aa6-bcdb-1e9e5c11a659
 - id: b0ace140-e24c-4aed-a59a-0ee65fa7d9e5
   pattern: https://purchasing.byu.edu/
   match: prefix
